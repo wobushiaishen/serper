@@ -1,0 +1,461 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>聊天</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+        
+        body {
+            font-family: Arial, sans-serif;
+            background-color: white;
+            height: 100vh;
+            display: flex;
+            flex-direction: column;
+        }
+        
+        /* 顶部蓝色横条 */
+        .blue-bar {
+            height: 80px;
+            background-color: #0d47a1;
+            width: 100%;
+        }
+        
+        /* 圆形头像区域 */
+        .avatar-container {
+            display: flex;
+            justify-content: center;
+            margin-top: -40px;
+            margin-bottom: 40px;
+        }
+        
+        .avatar {
+            width: 200px;
+            height: 200px;
+            border-radius: 50%;
+            object-fit: cover;
+            border: 4px solid white;
+            box-shadow: 0 4px 8px rgba(0, 0, 0, 0.1);
+        }
+        
+        /* 聊天区域 */
+        .chat-area {
+            flex: 1;
+            padding: 0 20px 100px;
+            overflow-y: auto;
+            display: none;
+        }
+        
+        .chat-area.active {
+            display: block;
+        }
+        
+        .message {
+            max-width: 70%;
+            padding: 12px 16px;
+            border-radius: 18px;
+            margin-bottom: 16px;
+            word-wrap: break-word;
+            animation: fadeIn 0.3s ease;
+        }
+        
+        @keyframes fadeIn {
+            from { opacity: 0; transform: translateY(10px); }
+            to { opacity: 1; transform: translateY(0); }
+        }
+        
+        .user-message {
+            background-color: #0d47a1;
+            color: white;
+            margin-left: auto;
+            border-bottom-right-radius: 4px;
+        }
+        
+        .bot-message {
+            background-color: #f0f0f0;
+            color: #333;
+            margin-right: auto;
+            border-bottom-left-radius: 4px;
+        }
+        
+        .bot-avatar {
+            width: 32px;
+            height: 32px;
+            border-radius: 50%;
+            object-fit: cover;
+            margin-right: 8px;
+            vertical-align: middle;
+        }
+        
+        /* 输入区域 */
+        .input-container {
+            position: fixed;
+            bottom: 0;
+            left: 0;
+            width: 100%;
+            background-color: white;
+            border-top: 1px solid #e0e0e0;
+            padding: 15px 20px;
+            display: flex;
+            align-items: center;
+            border-top-left-radius: 15px;
+            border-top-right-radius: 15px;
+            box-shadow: 0 -2px 10px rgba(0, 0, 0, 0.05);
+            height: 70px;
+        }
+        
+        .chat-input {
+            flex: 1;
+            border: 1px solid #e0e0e0;
+            border-radius: 20px;
+            padding: 12px 18px;
+            font-size: 16px;
+            outline: none;
+        }
+        
+        .chat-input::placeholder {
+            color: #999;
+        }
+        
+        .send-button {
+            background-color: #0d47a1;
+            color: white;
+            border: none;
+            border-radius: 50%;
+            width: 45px;
+            height: 45px;
+            margin-left: 12px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            cursor: pointer;
+        }
+        
+        /* 图片消息 */
+        .message-image {
+            max-width: 200px;
+            border-radius: 8px;
+            margin-top: 8px;
+        }
+        .mindmap-container {
+            width: 100%;
+            height: 400px;
+        }
+    </style>
+</head>
+<body>
+    <!-- 顶部蓝色横条 -->
+    <div class="blue-bar"></div>
+    
+    <!-- 圆形头像 -->
+    <div class="avatar-container">
+        <img src="" alt="" class="avatar" id="mainAvatar">
+    </div>
+    
+    <!-- 聊天区域 -->
+    <div class="chat-area" id="chatArea">
+        <!-- 消息将动态添加到这里 -->
+    </div>
+    
+    <!-- 输入区域 -->
+    <div class="input-container">
+        <input type="text" class="chat-input" id="chatInput" placeholder="聊天" autocomplete="off">
+        <button class="send-button" id="sendButton">
+            <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                <line x1="22" y1="2" x2="11" y2="13"></line>
+                <polygon points="22 2 15 22 11 13 2 9 22 2"></polygon>
+            </svg>
+        </button>
+    </div>
+
+    <script>
+        const API_BASE = 'http://localhost:8000';
+
+        // 获取DOM元素
+        const mainAvatar = document.getElementById('mainAvatar');
+        const chatArea = document.getElementById('chatArea');
+        const chatInput = document.getElementById('chatInput');
+        const sendButton = document.getElementById('sendButton');
+        
+        // 图片文件 - 请根据实际文件名修改
+        const initialAvatar = '03.jpg';  // 初始头像
+        const userAvatar = '04.jpg';     // 用户头像（聊天开始后）
+        
+        // 设置初始头像
+        mainAvatar.src = initialAvatar;
+
+        // 读取 token（可能来自登录页面的跳转参数或 localStorage）
+        function getQueryParam(name) {
+            const url = new URL(window.location.href);
+            return url.searchParams.get(name);
+        }
+
+        const urlToken = getQueryParam('token');
+        const storedToken = localStorage.getItem('auth_token');
+        const authToken = urlToken || storedToken;
+        if (urlToken && !storedToken) localStorage.setItem('auth_token', urlToken);
+        if (!authToken) {
+            // 未登录，跳回登录页
+            window.location.href = 'getin.html';
+        }
+        
+        // 消息历史：只保存在当前页面内存中
+        // 需求：页面不刷新时聊天记录保持；刷新/重新进入页面会清空
+        let messageHistory = [];
+        let isFirstMessage = true;
+        
+        // AI回复示例
+        const aiResponses = [
+            { text: "你好！我已经收到你的消息。" },
+            { text: "这是一个示例回复，展示了打字机效果。" },
+            { text: "我还可以在回复中包含图片：", hasImage: true, imageUrl: "example.jpg" },
+            { text: "感谢你的提问！" }
+        ];
+        let aiResponseIndex = 0;
+        
+        // 发送消息
+        let sessionId = localStorage.getItem('session_id') || null;
+
+        function sendMessage() {
+            const messageText = chatInput.value.trim();
+            if (!messageText) return;
+            
+            // 如果是第一条消息，激活聊天界面
+            if (isFirstMessage) {
+                activateChat();
+            }
+            
+            // 添加用户消息
+            addMessage(messageText, 'user');
+            
+            // 清空输入框
+            chatInput.value = '';
+            
+            // 发送到后端
+            const body = { message: messageText, session_id: sessionId, stream: true };
+
+            // 使用 fetch 流式读取服务器返回的 text/event-stream
+            fetch(API_BASE + '/api/chat', {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json',
+                    'Authorization': 'Bearer ' + authToken
+                },
+                body: JSON.stringify(body)
+            }).then(async res => {
+                if (!res.ok) {
+                    if (res.status === 401) {
+                        localStorage.removeItem('auth_token');
+                        alert('登录已过期，请重新登录');
+                        window.location.href = 'getin.html';
+                        return;
+                    }
+                    const txt = await res.text();
+                    addMessage('发送失败：' + (txt || res.statusText), 'bot');
+                    return;
+                }
+
+                // 流式处理
+                const reader = res.body.getReader();
+                const decoder = new TextDecoder('utf-8');
+                let buffer = '';
+
+                function processChunk(chunk) {
+                    buffer += chunk;
+                    let parts = buffer.split('\n\n');
+                    buffer = parts.pop();
+                    for (const part of parts) {
+                        const trimmed = part.trim();
+                        if (!trimmed) continue;
+                        // 每个 part 以 'data: ' 开头
+                        const lines = trimmed.split('\n');
+                        for (const line of lines) {
+                            if (line.startsWith('data:')) {
+                                const payload = line.replace(/^data:\s*/, '');
+                                try {
+                                    const obj = JSON.parse(payload);
+                                    // 处理分块：如果包含 chunk 字段则更新打字机内容
+                                    if (obj.chunk) {
+                                        // 将或更新最后一个 bot 消息的内容
+                                        const last = chatArea.querySelector('.bot-message:last-of-type span');
+                                        if (last) {
+                                            last.textContent = obj.chunk;
+                                        } else {
+                                            addPartialBot(obj.chunk);
+                                        }
+                                    }
+                                    // 完成消息包含 complete:true
+                                    if (obj.complete) {
+                                        // 将 session_id 保存
+                                        if (obj.session_id) {
+                                            sessionId = obj.session_id;
+                                            localStorage.setItem('session_id', sessionId);
+                                        }
+                                        // 处理 media_info
+                                        if (obj.has_media && obj.media_info) {
+                                            addMediaMessage(obj.media_info);
+                                        }
+                                        // 会话生成后把头像换回 initialAvatar
+                                        setTimeout(() => { mainAvatar.src = initialAvatar; }, 500);
+                                    }
+                                } catch (e) {
+                                    // 忽略解析错误
+                                }
+                            }
+                        }
+                    }
+                }
+
+                // 初始 bot message placeholder
+                addPartialBot('');
+
+                while (true) {
+                    const { done, value } = await reader.read();
+                    if (done) break;
+                    const chunk = decoder.decode(value, { stream: true });
+                    processChunk(chunk);
+                }
+
+            }).catch(e => {
+                addMessage('请求异常：' + e, 'bot');
+            });
+        }
+        
+        // 激活聊天界面
+        function activateChat() {
+            // 显示聊天区域
+            chatArea.classList.add('active');
+            
+            // 更改头像为04.jpg并缩小到左上角
+            mainAvatar.style.width = '40px';
+            mainAvatar.style.height = '40px';
+            mainAvatar.style.position = 'fixed';
+            mainAvatar.style.top = '20px';
+            mainAvatar.style.left = '20px';
+            mainAvatar.style.margin = '0';
+            mainAvatar.src = userAvatar;
+            
+            isFirstMessage = false;
+        }
+        
+        // 添加用户消息
+        function addMessage(text, sender, save = true) {
+            const messageDiv = document.createElement('div');
+            messageDiv.className = `message ${sender}-message`;
+            messageDiv.textContent = text;
+            
+            chatArea.appendChild(messageDiv);
+            chatArea.scrollTop = chatArea.scrollHeight;
+            
+            // 保存到历史
+            if (save) {
+                messageHistory.push({ text, sender, time: new Date() });
+                saveChatState();
+            }
+        }
+        
+        function addBotMessage(text, save = true) {
+            const messageDiv = document.createElement('div');
+            messageDiv.className = 'message bot-message';
+
+            const avatarImg = document.createElement('img');
+            avatarImg.className = 'bot-avatar';
+            avatarImg.src = initialAvatar;
+            avatarImg.alt = 'AI';
+
+            const textContainer = document.createElement('span');
+            textContainer.textContent = text || '';
+
+            messageDiv.appendChild(avatarImg);
+            messageDiv.appendChild(textContainer);
+
+            chatArea.appendChild(messageDiv);
+            chatArea.scrollTop = chatArea.scrollHeight;
+
+            if (save) {
+                messageHistory.push({ text: text || '', sender: 'bot', time: new Date() });
+                saveChatState();
+            }
+        }
+
+        // 添加一个正在更新的 bot 消息（用于流式分块更新）
+        function addPartialBot(initialText) {
+            addBotMessage(initialText || '', true);
+        }
+
+        function addMediaMessage(media_info) {
+            if (!media_info) return;
+            if (media_info.type === 'url' && media_info.url) {
+                const img = document.createElement('img');
+                img.src = media_info.url;
+                img.className = 'message-image';
+                const container = document.createElement('div');
+                container.className = 'message bot-message';
+                container.appendChild(img);
+                chatArea.appendChild(container);
+                chatArea.scrollTop = chatArea.scrollHeight;
+            } else if (media_info.type === 'file' && media_info.format === 'base64' && media_info.data) {
+                // 假设是图片 base64
+                const img = document.createElement('img');
+                img.src = 'data:image/png;base64,' + media_info.data;
+                img.className = 'message-image';
+                const container = document.createElement('div');
+                container.className = 'message bot-message';
+                container.appendChild(img);
+                chatArea.appendChild(container);
+                chatArea.scrollTop = chatArea.scrollHeight;
+            } else if (media_info.type === 'mindmap' && media_info.data) {
+                const container = document.createElement('div');
+                container.className = 'message bot-message';
+                const graphDiv = document.createElement('div');
+                graphDiv.className = 'mindmap-container';
+                container.appendChild(graphDiv);
+                chatArea.appendChild(container);
+                chatArea.scrollTop = chatArea.scrollHeight;
+
+                const graphData = media_info.data.data || media_info.data;
+
+                function drawMind(data) {
+                    const graph = new G6.TreeGraph({
+                        container: graphDiv,
+                        width: graphDiv.clientWidth,
+                        height: 400,
+                        modes: { default: ['collapse-expand', 'drag-canvas', 'zoom-canvas'] },
+                        defaultNode: {
+                            type: 'rect', size: [80,28], style:{radius:4,fill:'#E6F7FF',stroke:'#1890FF'},
+                            labelCfg:{position:'center',style:{fill:'#000',fontSize:12}}
+                        },
+                        defaultEdge:{ type:'cubic-horizontal', style:{stroke:'#A3B1BF'}},
+                        layout:{ type:'mindmap', direction:'H', getHeight:()=>16, getWidth:()=>80, getVGap:()=>10, getHGap:()=>60, getSide:()=> 'right'}
+                    });
+                    graph.data(data);
+                    graph.render();
+                }
+
+                if (typeof window.G6 === 'undefined') {
+                    const s = document.createElement('script');
+                    s.src = 'https://gw.alipayobjects.com/os/antv/pkg/_antv.g6-4.7.8/build/g6.min.js';
+                    s.onload = () => drawMind(graphData);
+                    document.head.appendChild(s);
+                } else {
+                    drawMind(graphData);
+                }
+            }
+        }
+        
+        // 事件监听
+        sendButton.addEventListener('click', sendMessage);
+        
+        chatInput.addEventListener('keypress', (e) => {
+            if (e.key === 'Enter') {
+                sendMessage();
+            }
+        });
+    </script>
+</body>
+</html>

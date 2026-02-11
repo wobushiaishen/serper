@@ -1,0 +1,56 @@
+{
+  "jsonrpc": "2.0",
+  "id": "mcp_result_1766968299",
+  "result": {
+    "type": "mindmap",
+    "title": "思维导图：早饭吃什么好？",
+    "root": {
+      "id": "root",
+      "text": "早饭吃什么好？",
+      "children": [
+        {
+          "id": "概念",
+          "text": "什么是 MCP",
+          "children": []
+        },
+        {
+          "id": "安装",
+          "text": "安装与配置",
+          "children": [
+            {
+              "id": "步骤1",
+              "text": "获取凭证并配置",
+              "children": []
+            },
+            {
+              "id": "步骤2",
+              "text": "启动示例服务器",
+              "children": []
+            }
+          ]
+        },
+        {
+          "id": "实践",
+          "text": "实践与示例",
+          "children": [
+            {
+              "id": "示例1",
+              "text": "调用工具生成思维导图",
+              "children": []
+            },
+            {
+              "id": "示例2",
+              "text": "处理返回的资源(URL/base64)",
+              "children": []
+            }
+          ]
+        },
+        {
+          "id": "资源",
+          "text": "官方文档与教程",
+          "children": []
+        }
+      ]
+    }
+  }
+}

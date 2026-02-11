@@ -1,0 +1,233 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>用户登录</title>
+    <style>
+        * { margin: 0; padding: 0; box-sizing: border-box; font-family: Arial, sans-serif; }
+        
+        body {
+            background: url('05.jpg') no-repeat center center fixed;
+            background-size: cover;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            min-height: 100vh;
+            background-color: #2c3e50;
+        }
+        
+        .login-box {
+            background: rgba(255, 255, 255, 0.95);
+            border-radius: 6px;
+            padding: 15px 20px;
+            width: 360px;
+            height: auto;
+            min-height: 180px;
+            text-align: center;
+            box-shadow: 0 3px 10px rgba(0, 0, 0, 0.2);
+            display: flex;
+            flex-direction: column;
+            justify-content: center;
+        }
+        .notice {
+            font-size: 12px;
+            color: #7a4200;
+            background: #fff7e6;
+            border: 1px solid #ffd89b;
+            padding: 8px 10px;
+            border-radius: 4px;
+            margin-bottom: 10px;
+            text-align: left;
+        }
+        
+        .logo {
+            width: 40px;
+            height: 40px;
+            object-fit: cover;
+            border: 2px solid #3498db;
+            margin-bottom: 12px;
+            margin-left: auto;
+            margin-right: auto;
+            background-color: #f0f0f0;
+        }
+        
+        .input-group {
+            margin: 8px 0;
+            text-align: left;
+        }
+        
+        .input-label {
+            display: block;
+            color: #34495e;
+            font-size: 12px;
+            margin-bottom: 3px;
+            font-weight: 500;
+        }
+        
+        .input-field {
+            width: 100%;
+            padding: 8px 10px;
+            border: 2px solid #ddd;
+            border-radius: 4px;
+            font-size: 13px;
+            background: #f9f9f9;
+            transition: all 0.3s;
+        }
+        
+        .input-field:focus {
+            border-color: #3498db;
+            background: #fff;
+            box-shadow: 0 0 0 2px rgba(52, 152, 219, 0.2);
+            outline: none;
+        }
+        
+        .login-btn {
+            width: 100%;
+            padding: 8px;
+            background: #3498db;
+            color: white;
+            border: none;
+            border-radius: 4px;
+            font-size: 13px;
+            font-weight: 600;
+            cursor: pointer;
+            margin-top: 6px;
+            transition: background 0.3s;
+        }
+        
+        .login-btn:hover { background: #2980b9; }
+        
+        .popup-overlay {
+            position: fixed;
+            top: 0; left: 0;
+            width: 100%; height: 100%;
+            background: rgba(0, 0, 0, 0.7);
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            z-index: 1000;
+            opacity: 0;
+            visibility: hidden;
+            transition: opacity 0.3s;
+        }
+        
+        .popup-overlay.active { opacity: 1; visibility: visible; }
+        
+        .popup-image {
+            width: 0; height: 0;
+            box-shadow: 0 6px 15px rgba(0, 0, 0, 0.5);
+            background: #f5f5f5;
+        }
+        
+        .popup-animation {
+            animation: popupEffect 1s ease-out forwards;
+        }
+        
+        @keyframes popupEffect {
+            0% { width: 0; height: 0; transform: rotate(0deg) scale(0.1); opacity: 0; }
+            50% { width: 100px; height: 100px; transform: rotate(180deg) scale(1.2); opacity: 1; }
+            100% { width: 120px; height: 120px; transform: rotate(360deg) scale(1); opacity: 1; }
+        }
+    </style>
+</head>
+<body>
+    <div class="login-box">
+        <img src="01.jpg" alt="Logo" class="logo" id="topLogo">
+
+        
+        
+
+        <form id="loginForm">
+            <div class="input-group">
+                <label class="input-label">用户名</label>
+                <input type="text" class="input-field" id="username" placeholder="请输入用户名" required>
+            </div>
+            
+            <div class="input-group">
+                <label class="input-label">密码</label>
+                <input type="password" class="input-field" id="password" placeholder="请输入密码" required>
+            </div>
+            
+            <button type="submit" class="login-btn">登录</button>
+        </form>
+    </div>
+    
+    <div class="popup-overlay" id="popupOverlay">
+        <div class="popup-image" id="popupImage"></div>
+    </div>
+    
+    <script>
+        document.addEventListener('DOMContentLoaded', function() {
+            const API_BASE = 'http://localhost:8000';
+            const form = document.getElementById('loginForm');
+            const popup = document.getElementById('popupOverlay');
+            const popupImg = document.getElementById('popupImage');
+            
+            
+            form.addEventListener('submit', function(e) {
+                e.preventDefault();
+                
+                const user = document.getElementById('username').value.trim();
+                const pass = document.getElementById('password').value;
+
+                // 调用后端 /api/login
+                fetch(API_BASE + '/api/login', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ username: user, password: pass })
+                }).then(async res => {
+                    console.log('登录响应状态:', res.status);
+                    if (res.ok) {
+                        const data = await res.json();
+                        console.log('登录成功:', data);
+                        // 保存 token
+                        if (data.token) localStorage.setItem('auth_token', data.token);
+                        // 显示 popup 并用 02.jpg
+                        popup.classList.add('active');
+                        popupImg.classList.add('popup-animation');
+                        popupImg.style.backgroundImage = "url('02.jpg')";
+                        popupImg.style.backgroundSize = 'cover';
+
+                        setTimeout(() => {
+                            popup.classList.remove('active');
+                            popupImg.classList.remove('popup-animation');
+                            // 跳转到后端返回的 redirect_url 或默认 chatscreen.html
+                            const redirect = data.redirect_url || 'chatscreen.html';
+                            window.location.href = redirect + (redirect.includes('?') ? '&' : '?') + 'token=' + (data.token || '');
+                        }, 1000);
+                    } else {
+                        try {
+                            const err = await res.json();
+                            alert('登录失败：' + (err.message || res.statusText));
+                        } catch {
+                            alert('登录失败，请检查网络连接');
+                        }
+                        document.getElementById('password').value = '';
+                    }
+                }).catch(e => {
+                    console.error('登录请求错误:', e);
+                    alert('请求失败：' + e.message + '\n请检查：\n1. 后端服务器是否正常运行\n2. 网络连接是否正常\n3. 浏览器控制台查看详细错误');
+                });
+            });
+            
+            document.querySelectorAll('.input-field').forEach(input => {
+                input.addEventListener('focus', function() {
+                    this.style.borderColor = '#3498db';
+                    this.style.boxShadow = '0 0 0 2px rgba(52, 152, 219, 0.2)';
+                });
+                
+                input.addEventListener('blur', function() {
+                    this.style.borderColor = '#ddd';
+                    this.style.boxShadow = 'none';
+                });
+            });
+            
+            // 注意：不要在前端预填用户名和密码，留空以便用户输入
+            // 同时建议在浏览器里关闭/删除该站点的自动填充密码
+            document.getElementById('username').value = '';
+            document.getElementById('password').value = '';
+        });
+    </script>
+</body>
+</html>
