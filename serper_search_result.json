@@ -1,0 +1,41 @@
+{
+  "searchParameters": {
+    "q": "红岩网校",
+    "type": "search",
+    "num": 5,
+    "engine": "google"
+  },
+  "organic": [
+    {
+      "title": "红岩网校工作站",
+      "link": "https://redrock.team/",
+      "snippet": "红岩网校工作站是学校唯一一个从事互联网产品开发运营的校级学生组织，在校团委的指导下，走出了一大批优秀的IT互联网人才，深受腾讯、 阿里巴巴、字节跳动、华为等知名 ...",
+      "position": 1
+    },
+    {
+      "title": "红岩网校",
+      "link": "https://baike.baidu.com/item/%E7%BA%A2%E5%B2%A9%E7%BD%91%E6%A0%A1/1103299",
+      "snippet": "红岩网校是由重庆邮电大学党委于2000年牵头创建、学生自主运营管理的网络思想政治教育平台，以红岩精神为核心构建思想政治工作阵地。其采用“一校五网十三站”架构， ...",
+      "position": 2
+    },
+    {
+      "title": "RedrockTeam/about-us: 红岩网校- 关于我们",
+      "link": "https://github.com/RedrockTeam/about-us",
+      "snippet": "RedrockTeam/about-us · Folders and files · Latest commit · History · Repository files navigation. README. About us - Redrock. About. 红岩网校- 关于我们 ...",
+      "position": 3
+    },
+    {
+      "title": "重庆邮电大学“红岩网校”实施“六个一”工程开创大学生网络 ...",
+      "link": "http://www.moe.gov.cn/s78/A12/gongzuo/moe_2154/201101/t20110105_114187.html",
+      "snippet": "目前，“红岩网校”已发展成为“一校、五网、十三站、229个一级栏目、834个二级栏目、累计注册用户4万余人、日均点击量突破10万人次”的素质教育网络大平台，满足了学生多样化的 ...",
+      "position": 4
+    },
+    {
+      "title": "掌上重邮 - 红岩网校工作站",
+      "link": "https://m.app.redrock.team/",
+      "snippet": "学生查询. 输入姓名/学号即可查询学生信息 ; 考试/成绩查询. 考试安排，考场信息，考试成绩一键查看 ; 备忘添加. 直接添加至课表，更便捷的使用感受 ; 课前提醒. 每周推送/每日 ...",
+      "position": 5
+    }
+  ],
+  "credits": 1
+}
