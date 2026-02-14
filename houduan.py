@@ -5,14 +5,14 @@
 # 请在使用前手动填写以下信息
 
 # 1. 你的LLM API信息
-LLM_API_KEY = "b3e763f3af704bd0ad503ab453b116c4.7a2ao2K5SbmC4XrY"  # 需要填写：你的API密钥
-LLM_BASE_URL = "https://open.bigmodel.cn/api/paas/v4"  # 需要填写：你的平台URL（智谱AI的完整URL，不需要拼接）
-LLM_MODEL = "glm-4-flash-250414"  # 需要填写：你的模型名，如 qwen-max
+LLM_API_KEY =   # 需要填写：你的API密钥
+LLM_BASE_URL =   # 需要填写：你的平台URL（智谱AI的完整URL，不需要拼接）
+LLM_MODEL =   # 需要填写：你的模型名，如 qwen-max
 
 # 2. Serper 搜索 API 信息
-SERPER_API_KEY = "c1260f4908aaa9209616a9e7348fffdbf08a44dd"   # 需要填写：你的 Serper API Key
-SERPER_ENDPOINT = "https://google.serper.dev/search"
-SERPER_RESULT_COUNT = 10
+SERPER_API_KEY =    # 需要填写：你的 Serper API Key
+SERPER_ENDPOINT = 
+SERPER_RESULT_COUNT = 10 #可选，默认是这么多
 
 # ====================== 【代码主体区域】 ======================
 import uvicorn
@@ -480,12 +480,18 @@ def common_search_tool(query: str) -> Dict[str, Any]:
         if not crawed_processed:
             crawed_processed.append({"url": "N/A", "content": ["抓取失败，请参考摘要"], "blocked": False})
 
+    # 5) 提取结构化信息 (answerBox 和 knowledgeGraph)
+    answer_box = results.get("answerBox")
+    knowledge_graph = results.get("knowledgeGraph")
+
     return {
         "success": True,
         "keywords": keywords,
+        "answerBox": answer_box,
+        "knowledgeGraph": knowledge_graph,
         "top_links": top_links,
         "crawed": crawed_processed,
-        "raw_search": results,
+        "raw_search_organic": {k: v for k, v in results.items() if k.startswith('result')}
     }
 
 
