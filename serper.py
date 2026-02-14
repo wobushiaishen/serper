@@ -4,6 +4,9 @@ from bs4 import BeautifulSoup
 import os
 import re
 from DrissionPage import ChromiumPage, ChromiumOptions
+import time
+import threading
+from urllib.parse import urlparse
 
 SERPER_API_KEY = "c1260f4908aaa9209616a9e7348fffdbf08a44dd"  
 SEARCH_QUERY = "红岩网校"                        
@@ -107,20 +110,29 @@ words = ["红岩网校", "重庆邮电", "学习平台"]
 selected_links = match_select_func(results, words)
 print("匹配结果前三的链接：", selected_links)
 
-def craw(url, page):
-    """底层抓取：用同一个 page 去请求不同的 url"""
+def craw1(url):
+    """requests 抓取（快，适合大多数非百度站点）"""
     try:
-        page.get(url)
-        page.wait.doc_loaded()  # 等文档加载完成
-        return page.html or ""
+        r = requests.get(url, timeout=10)
+        return r.text
     except Exception as e:
-        print(f"抓取 {url} 失败: {e}")
+        print(f"requests 抓取失败: {url} - {e}")
         return ""
 
-def parse(html_content):
+
+def craw2(url, page):
+    """浏览器抓取（速度优先）：只负责返回 html，不做解析"""
+    try:
+        page.get(url)
+        page.wait.doc_loaded()
+        return page.html or ""
+    except Exception as e:
+        print(f"浏览器抓取失败: {url} - {e}")
+        return ""
+
+def parse1(html_content):
     finder = BeautifulSoup(html_content, 'html.parser')
 
-    # 尽量多抓一些标签里的文本
     text_span1 = finder.find_all(['h1', 'h2', 'h3', 'h4', 'h5', 'h6'])
     text_span2 = finder.find_all('p')
     text_span3 = finder.find_all('span')
@@ -131,14 +143,47 @@ def parse(html_content):
     contents = [span.get_text(" ", strip=True) for span in text_spans]
     return contents
 
+def parse2(html):
+    """百度轻量解析：只取 title/description/keywords，并返回 list[str] 方便走 filter_chinese"""
+    if not html:
+        return [], False
+
+    if "百度安全验证" in html:
+        return [], True
+
+    title = ""
+    m = re.search(r"<title>(.*?)</title>", html, re.I | re.S)
+    if m:
+        title = re.sub(r"\s+", " ", m.group(1)).strip()
+
+    desc = ""
+    m = re.search(r'<meta[^>]+name=["\']description["\'][^>]+content=["\'](.*?)["\']', html, re.I | re.S)
+    if m:
+        desc = re.sub(r"\s+", " ", m.group(1)).strip()
+
+    keywords = ""
+    m = re.search(r'<meta[^>]+name=["\']keywords["\'][^>]+content=["\'](.*?)["\']', html, re.I | re.S)
+    if m:
+        keywords = re.sub(r"\s+", " ", m.group(1)).strip()
+
+    parts = []
+    if title:
+        parts.append(title)
+    if keywords:
+        parts.append(keywords)
+    if desc:
+        parts.append(desc)
+
+    return parts, False
+    
 def filter_chinese(contents):
-    """只保留长度≥6的中文片段，并按顺序去重"""
     filtered_contents = []
     for content in contents:
         chinese_only = re.sub(r'[^\u4e00-\u9fff]', '', content)
         if chinese_only and len(chinese_only) >= 6:
             filtered_contents.append(chinese_only)
 
+    # 去重（保留顺序）
     seen = set()
     dedup = []
     for x in filtered_contents:
@@ -147,39 +192,86 @@ def filter_chinese(contents):
             dedup.append(x)
     return dedup
 
-def gathered_craw(url, crawed_processed, page):
-    """单个 url 的完整流程：抓取 + 解析 + 中文过滤"""
-    html = craw(url, page)
 
-    # 命中安全验证页就标记一下，避免误以为抓到内容
-    if "百度安全验证" in html:
-        print(f"⚠️ {url} 触发百度安全验证")
-        crawed_processed.append({"url": url, "content": [], "blocked": True})
+def super_threading_for_txt_craw(urls, crawed_processed, use_threading=True, max_threads=8):
+    def worker(u):
+        html = craw1(u)
+        # 调用 parse1（原版全量解析）
+        content = parse1(html)
+        filtered = filter_chinese(content)
+        crawed_processed.append({"url": u, "content": filtered, "blocked": False})
+
+    if not use_threading:
+        for u in urls:
+            worker(u)
         return
 
-    content = parse(html)
-    filtered_content = filter_chinese(content)
-    crawed_processed.append({"url": url, "content": filtered_content, "blocked": False})
+    threads = []
+    for u in urls:
+        t = threading.Thread(target=worker, args=(u,))
+        threads.append(t)
+        t.start()
 
-def super_for_txt_craw(urls, crawed_processed):
-    """自带打开浏览器 + 循环 urls 的多页面文本爬虫"""
+        if len(threads) >= max_threads:
+            for tt in threads:
+                tt.join()
+            threads = []
+
+    for tt in threads:
+        tt.join()
+
+def chrome_super_for_txt_craw(urls, crawed_processed):
     _co = ChromiumOptions()
     _co.set_paths(user_data_path=os.path.abspath("drission_profile_baidu"))
-    _co.headless(True)      # 默认无头；如果要手动过验证，可以临时改成 False
-    _co.no_imgs(True)       # 不加载图片，加快速度
+    _co.headless(True)
+    _co.no_imgs(True)
 
     page = ChromiumPage(_co)
-
     try:
-        for link in urls:
-            gathered_craw(link, crawed_processed, page)
+        for u in urls:
+            # 1. 抓取 HTML
+            html = craw2(u, page)
+            
+            # 2. 调用 parse2（百度轻量解析）
+            parts, blocked = parse2(html)
+
+            if blocked:
+                crawed_processed.append({"url": u, "content": [], "blocked": True})
+                continue
+
+            # 3. 过滤中文并保存
+            filtered = filter_chinese(parts)
+            crawed_processed.append({"url": u, "content": filtered, "blocked": False})
     finally:
         try:
             page.quit()
         except Exception:
             pass
 
-#爬虫实际操作
+def judge_super_craw(urls, crawed_processed, use_threading_for_requests=True):
+    baidu_urls = []
+    normal_urls = []
+
+    for u in urls:
+        host = (urlparse(u).netloc or "").lower()
+        if "baike.baidu.com" in host or host.endswith(".baidu.com") or host == "baidu.com":
+            baidu_urls.append(u)
+        else:
+            normal_urls.append(u)
+
+    # 先抓普通站：requests + 多线程（快）
+    if normal_urls:
+        super_threading_for_txt_craw(
+            normal_urls,
+            crawed_processed,
+            use_threading=use_threading_for_requests,
+            max_threads=8
+        )
+
+    # 再抓百度：浏览器（稳）
+    if baidu_urls:
+        chrome_super_for_txt_craw(baidu_urls, crawed_processed)
+
 selected_links = [
     'https://baike.baidu.com/item/%E7%BA%A2%E5%B2%A9%E7%BD%91%E6%A0%A1/1103299',
     'https://redrock.team/',
@@ -187,7 +279,6 @@ selected_links = [
 ]
 
 crawed_processed = []
-
-super_for_txt_craw(selected_links, crawed_processed)
+judge_super_craw(selected_links, crawed_processed, use_threading_for_requests=True)
 
 print(crawed_processed)

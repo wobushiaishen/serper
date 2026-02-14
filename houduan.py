@@ -8,27 +8,39 @@
 LLM_API_KEY = "b3e763f3af704bd0ad503ab453b116c4.7a2ao2K5SbmC4XrY"  # 需要填写：你的API密钥
 LLM_BASE_URL = "https://open.bigmodel.cn/api/paas/v4"  # 需要填写：你的平台URL（智谱AI的完整URL，不需要拼接）
 LLM_MODEL = "glm-4-flash-250414"  # 需要填写：你的模型名，如 qwen-max
-# 2. 你的MCP服务器信息（IQS Search MCP Server）
-IQS_MCP_API_KEY = "须填"  #阿里云的搜索MCP（单个）
-IQS_MCP_SERVER_URL = "https://iqs-mcp.aliyuncs.com/mcp-servers/iqs-mcp-server-search"  # streamableHttp# ====================== 【代码主体区域】 ======================
+
+# 2. Serper 搜索 API 信息
+SERPER_API_KEY = "c1260f4908aaa9209616a9e7348fffdbf08a44dd"   # 需要填写：你的 Serper API Key
+SERPER_ENDPOINT = "https://google.serper.dev/search"
+SERPER_RESULT_COUNT = 10
+
+# ====================== 【代码主体区域】 ======================
 import uvicorn
 import time
 import json
-from typing import Optional, Dict, Any, List
-from fastapi import FastAPI, HTTPException, Depends, Request, Header
+from typing import Optional, Dict, Any, List, Tuple
+from fastapi import FastAPI, HTTPException, Depends, Request, Header, UploadFile, File
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import JSONResponse, StreamingResponse
+from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 import asyncio
 import requests
 import os
-import pickle
 import uuid
 import secrets
 import traceback
 
+import re
+import threading
+from urllib.parse import urlparse
 
-# 当为 True 时，整个流程使用本地模拟结果（不调用外部 LLM / MCP）
+import fitz  # PyMuPDF
+import docx
+from bs4 import BeautifulSoup
+from DrissionPage import ChromiumPage, ChromiumOptions
+
+
+# 当为 True 时，整个流程使用本地模拟结果（不调用外部 LLM）
 # 注意：按要求永远不能打开离线模式
 OFFLINE_MODE = False
 
@@ -43,15 +55,17 @@ ALLOWED_ORIGINS = [
     "http://127.0.0.1:5500",
     "http://localhost:3000",      # 备用端口
     "http://127.0.0.1:3000",
+    "http://localhost:8080",      # Nginx 默认端口
+    "http://127.0.0.1:8080"
 ]
 
-# 5. 你的MCP工具信息 - IQS Search MCP Server
-YOUR_MCP_TOOLS = [
+# ====================== 工具信息 ======================
+SEARCH_TOOLS = [
     {
         "type": "function",
         "function": {
             "name": "common_search",
-            "description": "标准搜索接口：提供增强的网络开放域实时搜索能力，返回 markdown 格式结果。",
+            "description": "标准搜索接口：先调用 Serper 搜索，再筛选 3 个最有信息链接并抓取中文内容，返回给模型用于总结。",
             "parameters": {
                 "type": "object",
                 "properties": {
@@ -63,223 +77,544 @@ YOUR_MCP_TOOLS = [
     }
 ]
 
-# 全局变量，用于保存MCP协议所需的会话ID
-mcp_session_id = None
 
-# ====================== MCP核心处理函数 ======================
-def call_mcp_tool_protocol(tool_name, arguments):
-    """严格按 MCP JSON-RPC 调用 IQS Search MCP（streamableHttp）。"""
-    global mcp_session_id
+# ====================== 浏览器预启动（单用户版本） ======================
+_global_baidu_browser_page: Optional[ChromiumPage] = None
+_global_baidu_browser_ready_at: Optional[float] = None
 
-    headers = {
-        "Content-Type": "application/json",
-        "Accept": "application/json, text/event-stream",
-        "X-API-Key": IQS_MCP_API_KEY,
-    }
 
-    # 1) initialize 获取 sessionId
-    if mcp_session_id is None:
-        init_request = {
-            "jsonrpc": "2.0",
-            "id": str(uuid.uuid4()),
-            "method": "initialize",
-            "params": {
-                "protocolVersion": "2024-11-05",
-                "clientInfo": {"name": "IQSClient", "version": "1.0"},
-            },
+def prepare_baidu_browser() -> Dict[str, Any]:
+    global _global_baidu_browser_page
+    global _global_baidu_browser_ready_at
+
+    if _global_baidu_browser_page is not None:
+        return {
+            "success": True,
+            "message": "browser already prepared",
+            "ready_at": _global_baidu_browser_ready_at,
         }
-        resp = requests.post(IQS_MCP_SERVER_URL, json=init_request, headers=headers, timeout=30)
-        try:
-            resp_data = resp.json()
-        except Exception:
-            resp_data = None
 
-        sid = None
-        if isinstance(resp_data, dict):
-            sid = resp_data.get("result", {}).get("sessionId") or resp_data.get("result", {}).get("session_id")
-            sid = sid or resp_data.get("sessionId") or resp_data.get("session_id")
-        if not sid:
-            sid = resp.headers.get("mcp-session-id") or resp.headers.get("MCP-Session-Id") or resp.headers.get("session-id")
+    _co = ChromiumOptions()
+    # 兼容不同 DrissionPage 版本/类型检查：优先用 set_user_data_path
+    _co.set_user_data_path(os.path.abspath("drission_profile_baidu"))
+    _co.headless(True)
+    _co.no_imgs(True)
 
-        mcp_session_id = sid
-        if not mcp_session_id:
-            # IQS Search MCP 的 initialize 可能不返回 sessionId；兼容处理：使用请求 id 作为临时 sessionId
-            mcp_session_id = init_request["id"]
-            print(f"⚠️ initialize 未返回 sessionId，使用临时 sessionId={mcp_session_id}")
+    page = ChromiumPage(_co)
+    _global_baidu_browser_page = page
+    _global_baidu_browser_ready_at = time.time()
 
-    # 2) tools/call
-    call_request = {
-        "jsonrpc": "2.0",
-        "id": str(uuid.uuid4()),
-        "method": "tools/call",
-        "params": {
-            "name": tool_name,
-            "arguments": arguments,
-            "sessionId": mcp_session_id,
-        },
+    return {
+        "success": True,
+        "message": "browser prepared",
+        "ready_at": _global_baidu_browser_ready_at,
     }
 
-    # 有些服务需要 header 也带 session；若服务不认 sessionId，也不会影响
-    headers_with_session = dict(headers)
-    if mcp_session_id:
-        headers_with_session["mcp-session-id"] = str(mcp_session_id)
 
-    resp = requests.post(IQS_MCP_SERVER_URL, json=call_request, headers=headers_with_session, timeout=60)
+def get_prepared_baidu_browser() -> Optional[ChromiumPage]:
+    return _global_baidu_browser_page
+
+
+def close_prepared_baidu_browser() -> None:
+    global _global_baidu_browser_page
+    global _global_baidu_browser_ready_at
+
+    if _global_baidu_browser_page is None:
+        return
+
     try:
-        data = resp.json()
+        _global_baidu_browser_page.quit()
     except Exception:
-        return {"success": False, "error": f"MCP 返回非 JSON，status={resp.status_code}", "details": resp.text[:500]}
+        pass
 
-    if isinstance(data, dict) and data.get("error"):
-        return {"success": False, "error": data.get("error")}
+    _global_baidu_browser_page = None
+    _global_baidu_browser_ready_at = None
 
-    # IQS 的结果通常在 result 里（可能是 markdown 字符串或结构体）
-    return {"success": True, "result": data.get("result", data)}
 
-async def process_mcp_chat_message(user_input: str, session: Dict) -> tuple[str, Optional[Dict]]:
-    """
-    处理聊天消息的核心函数 - 整合了MCP魔改之后.py的核心逻辑
-    返回: (响应文本, 媒体信息字典)
-    """
+# ====================== 知识库处理函数（PDF/Word 解析与检索） ======================
+
+def kb_split_into_sentences(text: str) -> List[str]:
+    """将文本按中英文句子结尾符号分割，并过滤掉太短的行"""
+    # 匹配：。 ！ ？ . ! ? \n
+    parts = re.split(r'([。！？.!？\n])', text)
+    sentences = []
+    for i in range(0, len(parts)-1, 2):
+        s = parts[i].strip() + parts[i+1]
+        if len(s) > 2:
+            sentences.append(s)
+    # 补齐最后一段
+    if len(parts) % 2 != 0:
+        s = parts[-1].strip()
+        if len(s) > 2:
+            sentences.append(s)
+    return sentences
+
+def kb_search_sentences(query: str, kb_sentences: List[str]) -> str:
+    """在句子列表中检索关键词匹配度最高的句子，并带上上下文"""
+    if not kb_sentences:
+        return ""
     
-    # 按要求：永远不能打开离线模式
-    if OFFLINE_MODE:
-        raise RuntimeError("OFFLINE_MODE 被禁止，请将 OFFLINE_MODE 设置为 False 并重启服务。")
+    # 1) 提取关键词
+    keywords = extract_keywords_5_with_llm(query)
+    if not keywords:
+        keywords = [w for w in re.split(r"\s+", query) if w][:5]
+    
+    # 2) 对每个句子打分
+    scores = []
+    for idx, sentence in enumerate(kb_sentences):
+        score = 0
+        for kw in keywords:
+            if kw.lower() in sentence.lower():
+                score += 1
+        scores.append((idx, score))
+    
+    # 3) 按分数排序，取 Top 3-5
+    sorted_scores = sorted(scores, key=lambda x: x[1], reverse=True)
+    top_indices = [idx for idx, score in sorted_scores[:5] if score > 0]
+    
+    if not top_indices:
+        return ""
+    
+    # 4) 获取上下文（前后各1句）并去重拼接
+    result_indices = set()
+    for idx in top_indices:
+        result_indices.add(idx)
+        if idx > 0: result_indices.add(idx - 1)
+        if idx < len(kb_sentences) - 1: result_indices.add(idx + 1)
+    
+    sorted_final_indices = sorted(list(result_indices))
+    context_parts = [kb_sentences[idx] for idx in sorted_final_indices]
+    
+    return "\n".join(context_parts)
 
-    # 在线模式：调用实际的MCP处理逻辑
+# ====================== 工具实现（保持 tool-call 流程不变） ======================
+
+def simple_serper_search(query: str, num: int = SERPER_RESULT_COUNT) -> Dict[str, Any]:
+    headers = {
+        'X-API-KEY': SERPER_API_KEY,
+        'Content-Type': 'application/json'
+    }
+
+    data = {
+        "q": query,
+        "num": num
+    }
+
     try:
-        # ========== 第一个REQUEST：咨询LLM是否需要MCP ==========
-        system_prompt = """你是一个带联网搜索能力的助手。
+        response = requests.post(SERPER_ENDPOINT, headers=headers, data=json.dumps(data), timeout=30)
+        response.raise_for_status()
 
-当你需要获取最新信息、引用网页内容、或对事实进行核实时，请调用工具 common_search。
+        response_result = response.json()
 
-工具返回的内容是 markdown 文本，你需要基于该文本给出简明回答，并在答案中保留必要的引用/来源链接（如果工具结果中有）。
-"""
-        
-        # 构建包含对话历史的消息列表
+        results: Dict[str, Any] = {}
+        box_result = []
+        knowledge_result = []
+
+        if 'answerBox' in response_result:
+            box_result.append(response_result['answerBox'])
+            results["answerBox"] = box_result
+        if 'knowledgeGraph' in response_result:
+            knowledge_result.append(response_result['knowledgeGraph'])
+            results["knowledgeGraph"] = knowledge_result
+
+        result = []
+        organic = response_result.get('organic', []) or []
+        for i, item in enumerate(organic, 1):
+            result.append(item.get('title', '无标题'))
+            result.append(item.get('snippet', '无摘要'))
+            result.append(item.get('link', '无链接'))
+            results[f"result{i}"] = result
+            result = []
+
+        return results
+
+    except requests.exceptions.RequestException as e:
+        return {"error": f"网络请求出错: {e}"}
+    except json.JSONDecodeError as e:
+        return {"error": f"解析JSON响应出错: {e}"}
+    except Exception as e:
+        return {"error": f"发生未知错误: {e}"}
+
+
+def match_select_func(results: Dict[str, Any], words: List[str]) -> List[str]:
+    match_count = {}
+    for result_key in ['result1', 'result2', 'result3']:
+        if result_key in results:
+            result_list = results[result_key]
+            text = str(result_list[0]) + str(result_list[1])
+            count = 0
+            for word in words:
+                if word and (word in text):
+                    count += 1
+            match_count[result_key] = count
+
+    sorted_results = sorted(match_count.items(), key=lambda x: x[1], reverse=True)
+
+    links = []
+    for i in range(min(3, len(sorted_results))):
+        result_key = sorted_results[i][0]
+        link = results[result_key][2]
+        links.append(link)
+
+    return links
+
+
+def craw1(url: str) -> str:
+    try:
+        r = requests.get(url, timeout=10)
+        return r.text
+    except Exception as e:
+        print(f"requests 抓取失败: {url} - {e}")
+        return ""
+
+
+def craw2(url: str, page: ChromiumPage) -> str:
+    try:
+        page.get(url)
+        page.wait.doc_loaded()
+        return page.html or ""
+    except Exception as e:
+        print(f"浏览器抓取失败: {url} - {e}")
+        return ""
+
+
+def parse1(html_content: str) -> List[str]:
+    finder = BeautifulSoup(html_content, 'html.parser')
+
+    text_span1 = finder.find_all(['h1', 'h2', 'h3', 'h4', 'h5', 'h6'])
+    text_span2 = finder.find_all('p')
+    text_span3 = finder.find_all('span')
+    text_span4 = finder.find_all('div')
+    text_span5 = finder.find_all('li')
+    text_spans = text_span1 + text_span2 + text_span3 + text_span4 + text_span5
+
+    contents = [span.get_text(" ", strip=True) for span in text_spans]
+    return contents
+
+
+def parse2(html: str) -> Tuple[List[str], bool]:
+    if not html:
+        return [], False
+
+    if "百度安全验证" in html:
+        return [], True
+
+    title = ""
+    m = re.search(r"<title>(.*?)</title>", html, re.I | re.S)
+    if m:
+        title = re.sub(r"\s+", " ", m.group(1)).strip()
+
+    desc = ""
+    m = re.search(r'<meta[^>]+name=["\']description["\'][^>]+content=["\'](.*?)["\']', html, re.I | re.S)
+    if m:
+        desc = re.sub(r"\s+", " ", m.group(1)).strip()
+
+    keywords = ""
+    m = re.search(r'<meta[^>]+name=["\']keywords["\'][^>]+content=["\'](.*?)["\']', html, re.I | re.S)
+    if m:
+        keywords = re.sub(r"\s+", " ", m.group(1)).strip()
+
+    parts = []
+    if title:
+        parts.append(title)
+    if keywords:
+        parts.append(keywords)
+    if desc:
+        parts.append(desc)
+
+    return parts, False
+
+
+def filter_chinese(contents: List[str]) -> List[str]:
+    filtered_contents = []
+    for content in contents:
+        chinese_only = re.sub(r'[^\u4e00-\u9fff]', '', str(content))
+        if chinese_only and len(chinese_only) >= 6:
+            filtered_contents.append(chinese_only)
+
+    seen = set()
+    dedup = []
+    for x in filtered_contents:
+        if x not in seen:
+            seen.add(x)
+            dedup.append(x)
+    return dedup
+
+
+def super_threading_for_txt_craw(urls: List[str], crawed_processed: List[Dict[str, Any]], use_threading: bool = True, max_threads: int = 8):
+    def worker(u):
+        html = craw1(u)
+        content = parse1(html)
+        filtered = filter_chinese(content)
+        crawed_processed.append({"url": u, "content": filtered, "blocked": False})
+
+    if not use_threading:
+        for u in urls:
+            worker(u)
+        return
+
+    threads = []
+    for u in urls:
+        t = threading.Thread(target=worker, args=(u,))
+        threads.append(t)
+        t.start()
+
+        if len(threads) >= max_threads:
+            for tt in threads:
+                tt.join()
+            threads = []
+
+    for tt in threads:
+        tt.join()
+
+
+def chrome_super_for_txt_craw(urls: List[str], crawed_processed: List[Dict[str, Any]]):
+    page = get_prepared_baidu_browser()
+    if page is None:
+        prepare_baidu_browser()
+        page = get_prepared_baidu_browser()
+
+    if page is None:
+        for u in urls:
+            crawed_processed.append({"url": u, "content": [], "blocked": True})
+        return
+
+    for u in urls:
+        html = craw2(u, page)
+        parts, blocked = parse2(html)
+
+        if blocked:
+            crawed_processed.append({"url": u, "content": [], "blocked": True})
+            continue
+
+        filtered = filter_chinese(parts)
+        crawed_processed.append({"url": u, "content": filtered, "blocked": False})
+
+
+def judge_super_craw(urls: List[str], crawed_processed: List[Dict[str, Any]], use_threading_for_requests: bool = True):
+    baidu_urls = []
+    normal_urls = []
+
+    for u in urls:
+        host = (urlparse(u).netloc or "").lower()
+        if "baike.baidu.com" in host or host.endswith(".baidu.com") or host == "baidu.com":
+            baidu_urls.append(u)
+        else:
+            normal_urls.append(u)
+
+    if normal_urls:
+        super_threading_for_txt_craw(
+            normal_urls,
+            crawed_processed,
+            use_threading=use_threading_for_requests,
+            max_threads=8
+        )
+
+    if baidu_urls:
+        chrome_super_for_txt_craw(baidu_urls, crawed_processed)
+
+
+def extract_keywords_5_with_llm(user_question: str) -> List[str]:
+    prompt = (
+        "请从用户问题中提取5个用于网页搜索的关键词（尽量是名词/专有名词/关键短语），用 JSON 数组输出。\n"
+        "要求：只输出 JSON 数组，不要输出多余文字。\n"
+        f"用户问题：{user_question}"
+    )
+
+    llm_data = {
+        "model": LLM_MODEL,
+        "messages": [
+            {"role": "system", "content": "你是关键词提取器。"},
+            {"role": "user", "content": prompt},
+        ],
+    }
+
+    for attempt in range(2): # 增加重试
+        try:
+            resp = requests.post(
+                f"{LLM_BASE_URL}/chat/completions",
+                headers={"Authorization": f"Bearer {LLM_API_KEY}", "Content-Type": "application/json"},
+                json=llm_data,
+                timeout=40, # 增加超时
+            )
+            if resp.status_code == 200:
+                data = resp.json()
+                content = data["choices"][0]["message"].get("content", "")
+                # 清洗 JSON 格式（防止 LLM 输出 markdown 代码块）
+                json_str = re.sub(r'```json\s*|```', '', content).strip()
+                arr = json.loads(json_str)
+                if isinstance(arr, list):
+                    return [str(x).strip() for x in arr if str(x).strip()][:5]
+        except Exception as e:
+            print(f"关键词提取尝试 {attempt+1} 失败: {e}")
+            if attempt == 1: break
+    return []
+
+def common_search_tool(query: str) -> Dict[str, Any]:
+    # 1) 关键词（固定5个）
+    keywords = extract_keywords_5_with_llm(query)
+    if not keywords:
+        keywords = [w for w in re.split(r"\s+", query) if w][:5]
+
+    # 2) serper 搜索
+    results = {}
+    try:
+        results = simple_serper_search(query=query, num=SERPER_RESULT_COUNT)
+    except Exception as e:
+        print(f"Serper 搜索失败: {e}")
+        return {"success": False, "error": f"搜索服务异常: {str(e)}", "keywords": keywords}
+
+    if isinstance(results, dict) and results.get("error"):
+        return {"success": False, "error": results.get("error"), "keywords": keywords}
+
+    # 3) top3 选择
+    top_links = match_select_func(results, keywords)
+
+    # 4) 爬虫抓取（增加整体 try...except）
+    crawed_processed: List[Dict[str, Any]] = []
+    try:
+        judge_super_craw(top_links, crawed_processed, use_threading_for_requests=True)
+    except Exception as e:
+        print(f"爬虫执行异常: {e}")
+        # 如果爬虫全崩，至少把搜索摘要带回去
+        if not crawed_processed:
+            crawed_processed.append({"url": "N/A", "content": ["抓取失败，请参考摘要"], "blocked": False})
+
+    return {
+        "success": True,
+        "keywords": keywords,
+        "top_links": top_links,
+        "crawed": crawed_processed,
+        "raw_search": results,
+    }
+
+
+# ====================== 搜索工具分发逻辑 ======================
+
+def execute_internal_search(tool_name, arguments):
+    """
+    内部搜索分发器。不再包含任何外部协议逻辑。
+    只负责根据工具名称调用本地实现的 Serper+爬虫搜索。
+    """
+    if tool_name == "common_search":
+        q = (arguments or {}).get("query")
+        if not isinstance(q, str) or len(q.strip()) < 2:
+            return {"success": False, "error": "搜索查询无效"}
+        return common_search_tool(q.strip())
+    return {"success": False, "error": f"未知工具: {tool_name}"}
+
+
+async def process_ai_chat_message(
+    user_input: str,
+    session: Dict,
+    mode: str = "general",
+    search_enabled: bool = False,
+    kb_enabled: bool = False
+) -> tuple[str, Optional[Dict]]:
+    """
+    处理对话的核心逻辑：
+    1. 确定模式 (mode): 通用/编程。
+    2. [知识库优先]: 如果 kb_enabled，检索本地句子并标注 [用户上传资料参考]。
+    3. 标注 [用户提问]。
+    4. [搜索门控]: 如果 search_enabled，才向 LLM 提供搜索工具；否则不允许联网。
+    """
+    if OFFLINE_MODE:
+        raise RuntimeError("OFFLINE_MODE 被禁止")
+
+    try:
+        # 1. 基础提示词
+        if mode == "code":
+            system_prompt = "你是一个专业的编程助手。请只回答编程相关问题，提供高质量、可直接运行的代码示例。"
+        else:
+            system_prompt = "你是一个通用的AI助手。"
+
         messages = [{"role": "system", "content": system_prompt}]
-        
-        # 添加对话历史
+
+        # 2. 对话历史
         if session and "history" in session and session["history"]:
             for msg in session["history"]:
                 messages.append({"role": "user", "content": msg["user"]})
                 messages.append({"role": "assistant", "content": msg["assistant"]})
-        
-        # 添加当前用户消息
-        messages.append({"role": "user", "content": user_input})
-        
+
+        # 3. [知识库检索] 先于搜索进行
+        if kb_enabled:
+            kb_sentences = session.get("kb_sentences", [])
+            kb_context = kb_search_sentences(user_input, kb_sentences)
+            if kb_context:
+                messages.append({
+                    "role": "system",
+                    "content": f"[用户上传资料参考]:\n{kb_context}\n\n注意：请优先基于上述本地文档资料回答问题。"
+                })
+
+        # 4. [标注用户提问]
+        messages.append({"role": "user", "content": f"[用户提问]: {user_input}"})
+
+        # 5. [联网搜索工具门控]
         llm_data = {
             "model": LLM_MODEL,
-            "messages": messages,
-            "tools": YOUR_MCP_TOOLS,
-            "tool_choice": "auto"
+            "messages": messages
         }
+        if search_enabled:
+            llm_data["tools"] = SEARCH_TOOLS
+            llm_data["tool_choice"] = "auto"
 
         response = requests.post(
             f"{LLM_BASE_URL}/chat/completions",
             headers={"Authorization": f"Bearer {LLM_API_KEY}", "Content-Type": "application/json"},
             json=llm_data,
-            timeout=30
+            timeout=40
         )
         llm_result = response.json()
+        
+        if not isinstance(llm_result, dict) or "choices" not in llm_result or not llm_result["choices"]:
+            return f"LLM 响应异常: {llm_result.get('error', {}).get('message', '未知错误')}", None
+
         llm_message = llm_result["choices"][0]["message"]
 
-        print("=== LLM 返回 tool_calls ===")
-        try:
-            print(llm_message.get("tool_calls"))
-        except Exception:
-            print("<无法读取 tool_calls>")
-
-        # 判断是否需要调用 MCP（IQS common_search）
-        need_mcp = False
-        tool_to_call = None
-        tool_arguments = {}
-
-        if "tool_calls" in llm_message and llm_message["tool_calls"]:
-            need_mcp = True
+        # 6. 处理搜索调用（仅在开启搜索且 LLM 触发时）
+        if search_enabled and "tool_calls" in llm_message and llm_message["tool_calls"]:
             tool_call = llm_message["tool_calls"][0]
-            tool_to_call = tool_call["function"]["name"]
-            args_raw = tool_call["function"].get("arguments")
-            if isinstance(args_raw, str):
-                try:
-                    tool_arguments = json.loads(args_raw)
-                except Exception:
-                    tool_arguments = {}
-            elif isinstance(args_raw, dict):
-                tool_arguments = args_raw
-            else:
-                tool_arguments = {}
-
-        print("=== 解析到的工具调用 ===")
-        print("tool_to_call =", tool_to_call)
-        print("tool_arguments =", tool_arguments)
-
-        if need_mcp and tool_to_call:
-            mcp_result = call_mcp_tool_protocol(tool_to_call, tool_arguments)
-            print("=== MCP 返回 ===")
-            try:
-                print(json.dumps(mcp_result, ensure_ascii=False)[:800])
-            except Exception:
-                print(str(mcp_result)[:800])
-
-            final_messages = [
-                {"role": "system", "content": system_prompt},
-                {"role": "user", "content": user_input},
+            tool_name = tool_call["function"]["name"]
+            tool_args = json.loads(tool_call["function"].get("arguments", "{}"))
+            
+            # 执行本地搜索实现
+            search_result = execute_internal_search(tool_name, tool_args)
+            
+            # 标注搜索来源并二次总结
+            final_messages = messages + [
                 llm_message,
                 {
                     "role": "tool",
-                    "content": json.dumps(mcp_result, ensure_ascii=False),
-                    "tool_call_id": (llm_message.get("tool_calls") or [{}])[0].get("id") if llm_message.get("tool_calls") else None
+                    "content": f"[互联网检索参考]:\n{json.dumps(search_result, ensure_ascii=False)}",
+                    "tool_call_id": tool_call.get("id")
                 }
             ]
-
-            final_data = {
-                "model": LLM_MODEL,
-                "messages": final_messages
-            }
 
             final_response = requests.post(
                 f"{LLM_BASE_URL}/chat/completions",
                 headers={"Authorization": f"Bearer {LLM_API_KEY}", "Content-Type": "application/json"},
-                json=final_data,
-                timeout=30
+                json={"model": LLM_MODEL, "messages": final_messages},
+                timeout=40
             )
-            
-            if final_response.status_code != 200:
-                return f"处理过程中发生错误: LLM 二次请求失败，状态码={final_response.status_code}，响应={final_response.text[:500]}", None
-            
-            try:
-                final_result = final_response.json()
-            except Exception as e:
-                return f"处理过程中发生错误: LLM 二次请求返回非JSON: {e}，响应={final_response.text[:500]}", None
-            
-            if not isinstance(final_result, dict) or "choices" not in final_result or not final_result["choices"]:
-                return f"处理过程中发生错误: LLM 二次请求响应缺少 choices，响应={json.dumps(final_result, ensure_ascii=False)[:800]}", None
-            
-            final_message = final_result["choices"][0].get("message", {})
-            final_answer = final_message.get("content", "无内容")
-            return final_answer, None
+            final_result = final_response.json()
+            return final_result["choices"][0]["message"].get("content", "无内容"), None
 
-        final_answer = llm_message.get("content", "无内容")
-        return final_answer, None
+        return llm_message.get("content", "无内容"), None
 
     except Exception as e:
-        print("=== process_mcp_chat_message 异常堆栈 ===")
         print(traceback.format_exc())
         return f"处理过程中发生错误: {str(e)}", None
 
+
 # ====================== 应用启动事件 ======================
-# 使用新的lifespan事件处理替换已弃用的on_event
 from contextlib import asynccontextmanager
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    """应用启动和关闭时的生命周期管理"""
-    # 启动时执行
-    print("MCP智能助手API正在启动...")
+    print("AI智能助手API正在启动...")
     print(f"离线模式: {OFFLINE_MODE}")
     print(f"允许的来源: {ALLOWED_ORIGINS}")
-    # 启动时强制检查运行时规则（不可启用离线模式）
+
     try:
         ensure_offline_mode_disabled()
     except Exception as e:
@@ -287,23 +622,27 @@ async def lifespan(app: FastAPI):
         raise
 
     asyncio.create_task(cleanup_old_sessions())
-    
+
     yield
-    
-    # 关闭时执行（可选）
-    print("MCP智能助手API正在关闭...")
+
+    try:
+        close_prepared_baidu_browser()
+    except Exception:
+        pass
+
+    print("AI智能助手API正在关闭...")
+
 
 # ====================== FastAPI应用初始化 ======================
 app = FastAPI(
-    title="MCP智能助手API",
+    title="AI智能助手API",
     description="提供用户认证和智能聊天功能的API服务",
     version="2.0.0",
     docs_url="/api/docs",
     redoc_url="/api/redoc",
-    lifespan=lifespan  # 使用新的lifespan事件处理
+    lifespan=lifespan
 )
 
-# CORS中间件配置
 app.add_middleware(
     CORSMiddleware,
     allow_origins=ALLOWED_ORIGINS,
@@ -312,6 +651,7 @@ app.add_middleware(
     allow_headers=["*"],
     expose_headers=["*"],
 )
+
 
 # ====================== 数据模型定义 ======================
 class LoginRequest(BaseModel):
@@ -328,6 +668,9 @@ class ChatRequest(BaseModel):
     message: str
     session_id: Optional[str] = None
     stream: bool = False
+    mode: str = "general"  # "general" 或 "code"
+    search_enabled: bool = False # 联网搜索独立开关
+    kb_enabled: bool = False     # 知识库独立开关
 
 class ChatResponse(BaseModel):
     success: bool
@@ -338,46 +681,42 @@ class ChatResponse(BaseModel):
     timestamp: float
     tokens_used: Optional[int] = None
 
+
 # ====================== 全局状态管理 ======================
 conversation_sessions = {}
 valid_tokens = set()
 
+
 # ====================== 认证工具函数 ======================
 def authenticate_user(username: str, password: str) -> bool:
-    """验证用户名和密码（硬编码测试账户）"""
     return username == "测试员" and password == "hongyan"
 
+
 def generate_token() -> str:
-    """生成简单的访问令牌"""
     token = secrets.token_urlsafe(32)
     valid_tokens.add(token)
     return token
 
+
 def verify_token(token: str) -> bool:
-    """验证访问令牌"""
     return token in valid_tokens
 
 
 # ====================== 运行时规则检查 ======================
 def ensure_offline_mode_disabled():
-    """
-    确保绝对不允许打开离线模式。在每次会话前调用。
-    如果检测到为 True，则抛出 RuntimeError。
-    """
     if OFFLINE_MODE:
         raise RuntimeError("OFFLINE_MODE 被禁止，请将 OFFLINE_MODE 设置为 False 并重启服务。")
 
+
 # ====================== 依赖注入：验证访问令牌 ======================
 async def get_current_user(authorization: Optional[str] = Header(None)) -> bool:
-    """验证访问令牌的依赖函数"""
     if not authorization:
         raise HTTPException(
             status_code=401,
             detail="缺少认证令牌",
             headers={"WWW-Authenticate": "Bearer"},
         )
-    
-    # 提取 Bearer token
+
     try:
         scheme, token = authorization.split()
         if scheme.lower() != "bearer":
@@ -392,7 +731,7 @@ async def get_current_user(authorization: Optional[str] = Header(None)) -> bool:
             detail="无效的认证格式",
             headers={"WWW-Authenticate": "Bearer"},
         )
-    
+
     if not verify_token(token):
         raise HTTPException(
             status_code=401,
@@ -401,20 +740,17 @@ async def get_current_user(authorization: Optional[str] = Header(None)) -> bool:
         )
     return True
 
+
 # ====================== API端口1：用户登录 ======================
 @app.post("/api/login", response_model=LoginResponse)
 async def login(login_data: LoginRequest):
-    """
-    用户登录端口
-    验证用户名密码，成功后返回前端地址和访问令牌
-    """
     try:
         ensure_offline_mode_disabled()
     except Exception as e:
         raise HTTPException(status_code=503, detail=str(e))
+
     if authenticate_user(login_data.username, login_data.password):
         token = generate_token()
-        
         return LoginResponse(
             success=True,
             message="登录成功",
@@ -427,6 +763,107 @@ async def login(login_data: LoginRequest):
             detail="用户名或密码错误"
         )
 
+
+# ====================== API端口：预启动浏览器（单用户） ======================
+@app.post("/api/websearch/prepare")
+async def websearch_prepare(authenticated: bool = Depends(get_current_user)):
+    try:
+        ensure_offline_mode_disabled()
+    except Exception as e:
+        raise HTTPException(status_code=503, detail=str(e))
+
+    try:
+        return prepare_baidu_browser()
+    except Exception as e:
+        print(traceback.format_exc())
+        raise HTTPException(status_code=500, detail=f"prepare browser failed: {e}")
+
+
+@app.post("/api/websearch/close")
+async def websearch_close(authenticated: bool = Depends(get_current_user)):
+    try:
+        ensure_offline_mode_disabled()
+    except Exception as e:
+        raise HTTPException(status_code=503, detail=str(e))
+
+    try:
+        close_prepared_baidu_browser()
+        return {"success": True}
+    except Exception as e:
+        print(traceback.format_exc())
+        raise HTTPException(status_code=500, detail=f"close browser failed: {e}")
+
+
+@app.post("/api/kb/upload")
+async def kb_upload(
+    file: UploadFile = File(...),
+    session_id: str = Header(...),
+    authenticated: bool = Depends(get_current_user)
+):
+    """上传 PDF/DOCX 文件并解析为句子列表存入 session"""
+    try:
+        ensure_offline_mode_disabled()
+    except Exception as e:
+        raise HTTPException(status_code=503, detail=str(e))
+
+    if session_id not in conversation_sessions:
+        conversation_sessions[session_id] = {
+            "history": [],
+            "created_at": time.time(),
+            "last_active": time.time(),
+            "message_count": 0,
+            "kb_sentences": []
+        }
+    
+    session = conversation_sessions[session_id]
+    session["last_active"] = time.time()
+
+    filename = file.filename.lower()
+    content = await file.read()
+    text = ""
+
+    try:
+        if filename.endswith(".pdf"):
+            doc = fitz.open(stream=content, filetype="pdf")
+            for page in doc:
+                text += page.get_text()
+            doc.close()
+        elif filename.endswith(".docx"):
+            from io import BytesIO
+            doc = docx.Document(BytesIO(content))
+            text = "\n".join([para.text for para in doc.paragraphs])
+        else:
+            raise HTTPException(status_code=400, detail="不支持的文件格式，仅支持 PDF 和 DOCX")
+    except Exception as e:
+        print(traceback.format_exc())
+        raise HTTPException(status_code=500, detail=f"文件解析失败: {str(e)}")
+
+    if not text.strip():
+        raise HTTPException(status_code=400, detail="文件内容为空或无法提取文本")
+
+    # 按句子分割
+    sentences = kb_split_into_sentences(text)
+    session["kb_sentences"] = sentences
+
+    return {
+        "success": True, 
+        "filename": file.filename, 
+        "sentence_count": len(sentences),
+        "message": "文件上传并解析完毕"
+    }
+
+
+@app.post("/api/kb/clear")
+async def kb_clear(
+    session_id: str = Header(...),
+    authenticated: bool = Depends(get_current_user)
+):
+    """清除当前会话的知识库内容"""
+    if session_id in conversation_sessions:
+        conversation_sessions[session_id]["kb_sentences"] = []
+    return {"success": True, "message": "知识库已清空"}
+
+
 # ====================== API端口2：智能聊天 ======================
 @app.post("/api/chat")
 async def chat_endpoint(
@@ -434,20 +871,13 @@ async def chat_endpoint(
     request: Request,
     authenticated: bool = Depends(get_current_user)
 ):
-    """
-    智能聊天端口 - 接收前端消息并返回处理结果
-    支持流式和非流式两种响应方式
-    """
-    # 每次会话前确保运行时规则（禁止离线模式）
     try:
         ensure_offline_mode_disabled()
     except Exception as e:
         raise HTTPException(status_code=503, detail=str(e))
-    
-    # 获取或创建会话ID
+
     session_id = chat_data.session_id or f"session_{int(time.time())}_{hash(chat_data.message) % 10000}"
-    
-    # 初始化或获取会话
+
     if session_id not in conversation_sessions:
         conversation_sessions[session_id] = {
             "history": [],
@@ -455,40 +885,47 @@ async def chat_endpoint(
             "last_active": time.time(),
             "message_count": 0
         }
-    
-    # 获取会话对象
+
     session = conversation_sessions[session_id]
 
     session["last_active"] = time.time()
     session["message_count"] += 1
-    
-    # 如果使用流式响应
+
     if chat_data.stream:
         return StreamingResponse(
-            stream_chat_response(chat_data.message, session_id, session),
+            stream_chat_response(
+                chat_data.message, 
+                session_id, 
+                session, 
+                chat_data.mode, 
+                chat_data.search_enabled, 
+                chat_data.kb_enabled
+            ),
             media_type="text/event-stream"
         )
-    
-    # 非流式响应
+
     try:
         user_input = chat_data.message
-        response_text, media_info = await process_mcp_chat_message(user_input, session)
-        
-        # 更新会话历史
+        response_text, media_info = await process_ai_chat_message(
+            user_input,
+            session,
+            chat_data.mode,
+            chat_data.search_enabled,
+            chat_data.kb_enabled
+        )
+
         session["history"].append({
             "user": user_input,
             "assistant": response_text,
             "timestamp": time.time(),
             "has_media": media_info is not None
         })
-        
-        # 限制历史记录长度
+
         if len(session["history"]) > 50:
             session["history"] = session["history"][-50:]
-        
-        # 构建响应
+
         has_media = media_info is not None
-        
+
         return ChatResponse(
             success=True,
             response=response_text,
@@ -498,7 +935,7 @@ async def chat_endpoint(
             timestamp=time.time(),
             tokens_used=len(response_text.split())
         )
-        
+
     except Exception as e:
         print(f"聊天处理错误: {str(e)}")
         raise HTTPException(
@@ -506,10 +943,8 @@ async def chat_endpoint(
             detail=f"处理消息时出错: {str(e)}"
         )
 
-async def stream_chat_response(message: str, session_id: str, session: Dict):
-    """
-    流式响应生成器
-    """
+
+async def stream_chat_response(message: str, session_id: str, session: Dict, mode: str = "general", search_enabled: bool = False, kb_enabled: bool = False):
     try:
         response_parts = [
             "思考中",
@@ -518,19 +953,19 @@ async def stream_chat_response(message: str, session_id: str, session: Dict):
             "正在生成回答",
             "回答完成"
         ]
-        
+
         for part in response_parts:
             yield f"data: {json.dumps({'chunk': part})}\n\n"
             await asyncio.sleep(0.5)
-        
-        full_response, media_info = await process_mcp_chat_message(message, session)
-        
+
+        full_response, media_info = await process_ai_chat_message(message, session, mode, search_enabled, kb_enabled)
+
         words = full_response.split()
         for i, word in enumerate(words):
             if i % 3 == 0:
                 yield f"data: {json.dumps({'chunk': ' '.join(words[:i+1])})}\n\n"
                 await asyncio.sleep(0.05)
-        
+
         completion_data = {
             "complete": True,
             "session_id": session_id,
@@ -538,15 +973,15 @@ async def stream_chat_response(message: str, session_id: str, session: Dict):
             "media_info": media_info
         }
         yield f"data: {json.dumps(completion_data)}\n\n"
-        
+
     except Exception as e:
         error_data = {"error": str(e), "complete": True}
         yield f"data: {json.dumps(error_data)}\n\n"
 
+
 # ====================== 辅助API端口 ======================
 @app.get("/api/sessions/{session_id}")
 async def get_session_info(session_id: str, authenticated: bool = Depends(get_current_user)):
-    """获取会话信息"""
     if session_id in conversation_sessions:
         session = conversation_sessions[session_id]
         return {
@@ -559,30 +994,30 @@ async def get_session_info(session_id: str, authenticated: bool = Depends(get_cu
     else:
         raise HTTPException(status_code=404, detail="会话不存在")
 
+
 @app.delete("/api/sessions/{session_id}")
 async def delete_session(session_id: str, authenticated: bool = Depends(get_current_user)):
-    """删除会话"""
     if session_id in conversation_sessions:
         del conversation_sessions[session_id]
         return {"success": True, "message": "会话已删除"}
     else:
         raise HTTPException(status_code=404, detail="会话不存在")
 
+
 @app.get("/api/health")
 async def health_check():
-    """健康检查端口"""
     return {
         "status": "healthy",
         "timestamp": time.time(),
         "active_sessions": len(conversation_sessions),
-        "service": "MCP智能助手API"
+        "service": "AI智能助手API",
     }
+
 
 @app.get("/")
 async def root():
-    """根路径，显示API信息"""
     return {
-        "service": "MCP智能助手API",
+        "service": "AI智能助手API",
         "version": "2.0.0",
         "endpoints": {
             "login": "/api/login (POST)",
@@ -592,24 +1027,23 @@ async def root():
         }
     }
 
+
 # ====================== 会话清理任务 ======================
 async def cleanup_old_sessions():
-    """定期清理超过24小时不活动的会话"""
     while True:
         await asyncio.sleep(3600)
         current_time = time.time()
         expired_sessions = []
-        
+
         for session_id, session in conversation_sessions.items():
             if current_time - session["last_active"] > 86400:
                 expired_sessions.append(session_id)
-        
+
         for session_id in expired_sessions:
             del conversation_sessions[session_id]
-        
+
         if expired_sessions:
             print(f"已清理 {len(expired_sessions)} 个过期会话")
-
 
 
 # ====================== 主程序入口 ======================
@@ -618,7 +1052,7 @@ if __name__ == "__main__":
         app,
         host="0.0.0.0",
         port=8000,
-        reload=False,  # 改为False避免警告
+        reload=False,
         log_level="info",
         access_log=True
     )

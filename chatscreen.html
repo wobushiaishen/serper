@@ -5,457 +5,444 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>聊天</title>
     <style>
-        * {
-            margin: 0;
-            padding: 0;
-            box-sizing: border-box;
-        }
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Arial, sans-serif; background-color: white; height: 100vh; display: flex; flex-direction: column; overflow: hidden; }
+        .blue-bar { height: 80px; background-color: #0d47a1; width: 100%; flex-shrink: 0; }
+        .avatar-container { display: flex; justify-content: center; margin-top: -40px; margin-bottom: 40px; transition: all 0.4s ease; z-index: 10; }
+        .avatar { width: 200px; height: 200px; border-radius: 50%; object-fit: cover; border: 4px solid white; box-shadow: 0 4px 12px rgba(0,0,0,0.15); }
         
-        body {
-            font-family: Arial, sans-serif;
-            background-color: white;
-            height: 100vh;
-            display: flex;
-            flex-direction: column;
-        }
+        /* 聊天激活后的头像样式 */
+        body.chat-active .avatar-container { position: fixed; top: 20px; left: 20px; margin: 0; }
+        body.chat-active .avatar { width: 40px; height: 40px; border-width: 2px; }
         
-        /* 顶部蓝色横条 */
-        .blue-bar {
-            height: 80px;
-            background-color: #0d47a1;
+        .chat-area { flex: 1; padding: 0 20px 100px; overflow-y: auto; display: none; scroll-behavior: smooth; }
+        body.chat-active .chat-area { display: block; }
+        
+        .message { max-width: 80%; padding: 12px 16px; border-radius: 18px; margin-bottom: 16px; word-wrap: break-word; line-height: 1.5; position: relative; animation: fadeIn 0.3s ease; }
+        @keyframes fadeIn { from { opacity: 0; transform: translateY(10px); } to { opacity: 1; transform: translateY(0); } }
+        
+        /* 颜色修正：调淡用户气泡颜色，区分顶部蓝条 */
+        .user-message { background-color: #7092be; color: white; margin-left: auto; border-bottom-right-radius: 4px; }
+        .bot-message { background-color: #f1f3f4; color: #202124; margin-right: auto; border-bottom-left-radius: 4px; display: flex; align-items: flex-start; }
+        .bot-avatar { width: 28px; height: 28px; border-radius: 50%; margin-right: 8px; flex-shrink: 0; margin-top: 2px; }
+        
+        /* 输入容器重构：支持文件条下移 */
+        .input-container { position: fixed; bottom: 0; left: 0; width: 100%; background: white; border-top: 1px solid #dadce0; padding: 12px 20px; display: flex; flex-direction: column; box-shadow: 0 -2px 10px rgba(0,0,0,0.05); z-index: 100; height: auto; }
+        
+        /* 文件状态条：移至打字框上方 */
+        .file-status-bar {
             width: 100%;
-        }
-        
-        /* 圆形头像区域 */
-        .avatar-container {
-            display: flex;
-            justify-content: center;
-            margin-top: -40px;
-            margin-bottom: 40px;
-        }
-        
-        .avatar {
-            width: 200px;
-            height: 200px;
-            border-radius: 50%;
-            object-fit: cover;
-            border: 4px solid white;
-            box-shadow: 0 4px 8px rgba(0, 0, 0, 0.1);
-        }
-        
-        /* 聊天区域 */
-        .chat-area {
-            flex: 1;
-            padding: 0 20px 100px;
-            overflow-y: auto;
-            display: none;
-        }
-        
-        .chat-area.active {
-            display: block;
-        }
-        
-        .message {
-            max-width: 70%;
-            padding: 12px 16px;
-            border-radius: 18px;
-            margin-bottom: 16px;
-            word-wrap: break-word;
-            animation: fadeIn 0.3s ease;
-        }
-        
-        @keyframes fadeIn {
-            from { opacity: 0; transform: translateY(10px); }
-            to { opacity: 1; transform: translateY(0); }
-        }
-        
-        .user-message {
-            background-color: #0d47a1;
-            color: white;
-            margin-left: auto;
-            border-bottom-right-radius: 4px;
-        }
-        
-        .bot-message {
-            background-color: #f0f0f0;
-            color: #333;
-            margin-right: auto;
-            border-bottom-left-radius: 4px;
-        }
-        
-        .bot-avatar {
-            width: 32px;
-            height: 32px;
-            border-radius: 50%;
-            object-fit: cover;
-            margin-right: 8px;
-            vertical-align: middle;
-        }
-        
-        /* 输入区域 */
-        .input-container {
-            position: fixed;
-            bottom: 0;
-            left: 0;
-            width: 100%;
-            background-color: white;
-            border-top: 1px solid #e0e0e0;
-            padding: 15px 20px;
-            display: flex;
+            padding: 8px 12px;
+            background: #f8f9fa;
+            border-radius: 10px;
+            margin-bottom: 8px;
+            display: none; /* 默认隐藏 */
             align-items: center;
-            border-top-left-radius: 15px;
-            border-top-right-radius: 15px;
-            box-shadow: 0 -2px 10px rgba(0, 0, 0, 0.05);
-            height: 70px;
+            font-size: 13px;
+            color: #444;
+            border: 1px solid #eef0f2;
         }
+        .file-status-bar.active { display: flex; }
+        .file-icon { width: 18px; height: 18px; margin-right: 10px; }
+        .file-name { flex: 1; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+        .remove-file { cursor: pointer; color: #999; font-weight: bold; font-size: 16px; padding: 0 4px; margin-left: 8px; transition: color 0.2s; }
+        .remove-file:hover { color: #d93025; }
+
+        .loading-spinner { width: 14px; height: 14px; border: 2px solid #0d47a1; border-top-color: transparent; border-radius: 50%; animation: spin 1s linear infinite; margin-right: 8px; }
+        @keyframes spin { to { transform: rotate(360deg); } }
+
+        .input-main { display: flex; align-items: center; width: 100%; gap: 10px; }
         
-        .chat-input {
-            flex: 1;
-            border: 1px solid #e0e0e0;
-            border-radius: 20px;
-            padding: 12px 18px;
-            font-size: 16px;
-            outline: none;
-        }
-        
-        .chat-input::placeholder {
-            color: #999;
-        }
-        
-        .send-button {
-            background-color: #0d47a1;
-            color: white;
-            border: none;
-            border-radius: 50%;
-            width: 45px;
-            height: 45px;
-            margin-left: 12px;
-            display: flex;
-            align-items: center;
-            justify-content: center;
-            cursor: pointer;
-        }
-        
-        /* 图片消息 */
-        .message-image {
-            max-width: 200px;
-            border-radius: 8px;
-            margin-top: 8px;
-        }
-        .mindmap-container {
-            width: 100%;
-            height: 400px;
-        }
+        /* 模式与功能控制 */
+        .controls-row { display: flex; align-items: center; width: 100%; margin-bottom: 8px; gap: 12px; }
+        .mode-selector { display: flex; background: #f1f3f4; border-radius: 10px; padding: 3px; }
+        .mode-btn { padding: 5px 12px; border-radius: 8px; border: none; font-size: 12px; cursor: pointer; color: #5f6368; background: none; transition: all 0.2s; }
+        .mode-btn.active { background: white; color: #0d47a1; box-shadow: 0 2px 4px rgba(0,0,0,0.1); font-weight: bold; }
+
+        .toggle-group { display: flex; gap: 8px; }
+        .toggle-btn { background: #f1f3f4; border: 1px solid transparent; border-radius: 10px; padding: 5px 12px; font-size: 12px; cursor: pointer; color: #5f6368; display: flex; align-items: center; gap: 5px; transition: all 0.2s; }
+        .toggle-btn.active { background: #e8f0fe; border-color: #1a73e8; color: #1a73e8; font-weight: bold; }
+        .toggle-btn svg { width: 14px; height: 14px; }
+
+        .chat-input { flex: 1; border: 1px solid #dadce0; border-radius: 24px; padding: 10px 20px; font-size: 16px; outline: none; transition: border-color 0.2s; }
+        .chat-input:focus { border-color: #1a73e8; }
+        .send-button { background-color: #0d47a1; color: white; border: none; border-radius: 50%; width: 44px; height: 44px; display: flex; align-items: center; justify-content: center; cursor: pointer; transition: background 0.2s; flex-shrink: 0; }
+        .send-button:hover { background-color: #0a3a82; }
+        .send-button:disabled { background-color: #dadce0; cursor: not-allowed; }
+
+        .upload-overlay { position: fixed; top: 0; left: 0; width: 100%; height: 100%; background: rgba(13, 71, 161, 0.1); border: 4px dashed #0d47a1; display: none; justify-content: center; align-items: center; z-index: 200; pointer-events: none; }
+        body.drag-over .upload-overlay { display: flex; }
+        .upload-overlay span { background: white; padding: 20px 40px; border-radius: 30px; color: #0d47a1; font-weight: bold; font-size: 18px; box-shadow: 0 10px 25px rgba(0,0,0,0.2); }
+
+        .message-image { max-width: 100%; border-radius: 8px; margin-top: 8px; display: block; }
+        .mindmap-container { width: 100%; height: 350px; background: #fafafa; border-radius: 8px; margin-top: 8px; border: 1px solid #eee; }
     </style>
 </head>
-<body>
-    <!-- 顶部蓝色横条 -->
+<body id="body">
     <div class="blue-bar"></div>
+    <div class="avatar-container"><img src="03.jpg" alt="" class="avatar" id="mainAvatar"></div>
     
-    <!-- 圆形头像 -->
-    <div class="avatar-container">
-        <img src="" alt="" class="avatar" id="mainAvatar">
-    </div>
+    <div class="upload-overlay" id="uploadOverlay"><span>松开鼠标上传 PDF / Word 知识库</span></div>
     
-    <!-- 聊天区域 -->
-    <div class="chat-area" id="chatArea">
-        <!-- 消息将动态添加到这里 -->
-    </div>
+    <div class="chat-area" id="chatArea"></div>
     
-    <!-- 输入区域 -->
     <div class="input-container">
-        <input type="text" class="chat-input" id="chatInput" placeholder="聊天" autocomplete="off">
-        <button class="send-button" id="sendButton">
-            <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-                <line x1="22" y1="2" x2="11" y2="13"></line>
-                <polygon points="22 2 15 22 11 13 2 9 22 2"></polygon>
-            </svg>
-        </button>
+        <!-- 功能控制区 -->
+        <div class="controls-row">
+            <div class="mode-selector" id="modeSelector">
+                <button class="mode-btn active" data-mode="general">通用助手</button>
+                <button class="mode-btn" data-mode="code">编程助手</button>
+            </div>
+            <div class="toggle-group">
+                <button class="toggle-btn" id="kbToggle">
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M4 19.5A2.5 2.5 0 0 1 6.5 17H20"></path><path d="M6.5 2H20v20H6.5A2.5 2.5 0 0 1 4 19.5v-15A2.5 2.5 0 0 1 6.5 2z"></path></svg>
+                    知识库
+                </button>
+                <button class="toggle-btn" id="searchToggle">
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="8"></circle><line x1="21" y1="21" x2="16.65" y2="16.65"></line></svg>
+                    联网搜索
+                </button>
+            </div>
+        </div>
+
+        <!-- 文件状态条：仅在 KB 开启时根据文件情况显示 -->
+        <div class="file-status-bar" id="fileStatusBar">
+            <img class="file-icon" id="fileIcon" src="https://cdn-icons-png.flaticon.com/512/337/337946.png" alt="file">
+            <div class="loading-spinner" id="fileSpinner" style="display:none;"></div>
+            <span class="file-name" id="fileNameText">正在处理文件...</span>
+            <span class="remove-file" id="removeFileBtn" title="移除文件内容">×</span>
+        </div>
+
+        <!-- 输入主区 -->
+        <div class="input-main">
+            <input type="text" class="chat-input" id="chatInput" placeholder="输入消息..." autocomplete="off">
+            <button class="send-button" id="sendButton">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="22" y1="2" x2="11" y2="13"></line><polygon points="22 2 15 22 11 13 2 9 22 2"></polygon></svg>
+            </button>
+        </div>
     </div>
 
+    <script src="https://gw.alipayobjects.com/os/antv/pkg/_antv.g6-4.7.8/build/g6.min.js"></script>
     <script>
         const API_BASE = 'http://localhost:8000';
+        const TOKEN = new URL(window.location.href).searchParams.get('token') || localStorage.getItem('auth_token');
+        if (!TOKEN) window.location.href = 'getin.html';
+        else localStorage.setItem('auth_token', TOKEN);
 
-        // 获取DOM元素
-        const mainAvatar = document.getElementById('mainAvatar');
-        const chatArea = document.getElementById('chatArea');
-        const chatInput = document.getElementById('chatInput');
-        const sendButton = document.getElementById('sendButton');
-        
-        // 图片文件 - 请根据实际文件名修改
-        const initialAvatar = '03.jpg';  // 初始头像
-        const userAvatar = '04.jpg';     // 用户头像（聊天开始后）
-        
-        // 设置初始头像
-        mainAvatar.src = initialAvatar;
+        const DOM = {
+            body: document.getElementById('body'),
+            mainAvatar: document.getElementById('mainAvatar'),
+            chatArea: document.getElementById('chatArea'),
+            chatInput: document.getElementById('chatInput'),
+            sendButton: document.getElementById('sendButton'),
+            kbToggle: document.getElementById('kbToggle'),
+            searchToggle: document.getElementById('searchToggle'),
+            modeSelector: document.getElementById('modeSelector'),
+            fileStatusBar: document.getElementById('fileStatusBar'),
+            fileNameText: document.getElementById('fileNameText'),
+            fileIcon: document.getElementById('fileIcon'),
+            fileSpinner: document.getElementById('fileSpinner'),
+            removeFileBtn: document.getElementById('removeFileBtn'),
+            uploadOverlay: document.getElementById('uploadOverlay')
+        };
 
-        // 读取 token（可能来自登录页面的跳转参数或 localStorage）
-        function getQueryParam(name) {
-            const url = new URL(window.location.href);
-            return url.searchParams.get(name);
-        }
+        const AVATARS = { init: '03.jpg', user: '04.jpg', bot: '03.jpg' };
+        const KEYS = { state: 'chat_state_' + TOKEN, draft: 'chat_draft_' + TOKEN };
+        
+        let State = {
+            history: [],
+            isFirst: true,
+            mode: 'general',
+            kbEnabled: false,
+            searchEnabled: false,
+            uploadedFile: null, // { name, type }
+            sessionId: localStorage.getItem('session_id') || ('sess_' + Date.now())
+        };
+        localStorage.setItem('session_id', State.sessionId);
 
-        const urlToken = getQueryParam('token');
-        const storedToken = localStorage.getItem('auth_token');
-        const authToken = urlToken || storedToken;
-        if (urlToken && !storedToken) localStorage.setItem('auth_token', urlToken);
-        if (!authToken) {
-            // 未登录，跳回登录页
-            window.location.href = 'getin.html';
-        }
-        
-        // 消息历史：只保存在当前页面内存中
-        // 需求：页面不刷新时聊天记录保持；刷新/重新进入页面会清空
-        let messageHistory = [];
-        let isFirstMessage = true;
-        
-        // AI回复示例
-        const aiResponses = [
-            { text: "你好！我已经收到你的消息。" },
-            { text: "这是一个示例回复，展示了打字机效果。" },
-            { text: "我还可以在回复中包含图片：", hasImage: true, imageUrl: "example.jpg" },
-            { text: "感谢你的提问！" }
-        ];
-        let aiResponseIndex = 0;
-        
-        // 发送消息
-        let sessionId = localStorage.getItem('session_id') || null;
+        const Persist = {
+            save: () => {
+                try { localStorage.setItem(KEYS.state, JSON.stringify(State)); } catch(e) {}
+            },
+            load: () => {
+                const saved = localStorage.getItem(KEYS.state);
+                if (!saved) return;
+                try {
+                    const s = JSON.parse(saved);
+                    State.history = s.history || [];
+                    State.isFirst = s.isFirst !== undefined ? s.isFirst : true;
+                    State.mode = s.mode || 'general';
+                    State.kbEnabled = !!s.kbEnabled;
+                    State.searchEnabled = !!s.searchEnabled;
+                    State.uploadedFile = s.uploadedFile || null;
+                } catch(e) {}
+            },
+            saveDraft: (val) => localStorage.setItem(KEYS.draft, val),
+            loadDraft: () => localStorage.getItem(KEYS.draft) || '',
+            clearDraft: () => localStorage.removeItem(KEYS.draft)
+        };
 
-        function sendMessage() {
-            const messageText = chatInput.value.trim();
-            if (!messageText) return;
-            
-            // 如果是第一条消息，激活聊天界面
-            if (isFirstMessage) {
-                activateChat();
+        // --- UI 维护 ---
+        function syncUI() {
+            if (!State.isFirst) {
+                DOM.body.classList.add('chat-active');
+                DOM.mainAvatar.src = AVATARS.user;
             }
-            
-            // 添加用户消息
-            addMessage(messageText, 'user');
-            
-            // 清空输入框
-            chatInput.value = '';
-            
-            // 发送到后端
-            const body = { message: messageText, session_id: sessionId, stream: true };
-
-            // 使用 fetch 流式读取服务器返回的 text/event-stream
-            fetch(API_BASE + '/api/chat', {
-                method: 'POST',
-                headers: {
-                    'Content-Type': 'application/json',
-                    'Authorization': 'Bearer ' + authToken
-                },
-                body: JSON.stringify(body)
-            }).then(async res => {
-                if (!res.ok) {
-                    if (res.status === 401) {
-                        localStorage.removeItem('auth_token');
-                        alert('登录已过期，请重新登录');
-                        window.location.href = 'getin.html';
-                        return;
-                    }
-                    const txt = await res.text();
-                    addMessage('发送失败：' + (txt || res.statusText), 'bot');
-                    return;
-                }
-
-                // 流式处理
-                const reader = res.body.getReader();
-                const decoder = new TextDecoder('utf-8');
-                let buffer = '';
-
-                function processChunk(chunk) {
-                    buffer += chunk;
-                    let parts = buffer.split('\n\n');
-                    buffer = parts.pop();
-                    for (const part of parts) {
-                        const trimmed = part.trim();
-                        if (!trimmed) continue;
-                        // 每个 part 以 'data: ' 开头
-                        const lines = trimmed.split('\n');
-                        for (const line of lines) {
-                            if (line.startsWith('data:')) {
-                                const payload = line.replace(/^data:\s*/, '');
-                                try {
-                                    const obj = JSON.parse(payload);
-                                    // 处理分块：如果包含 chunk 字段则更新打字机内容
-                                    if (obj.chunk) {
-                                        // 将或更新最后一个 bot 消息的内容
-                                        const last = chatArea.querySelector('.bot-message:last-of-type span');
-                                        if (last) {
-                                            last.textContent = obj.chunk;
-                                        } else {
-                                            addPartialBot(obj.chunk);
-                                        }
-                                    }
-                                    // 完成消息包含 complete:true
-                                    if (obj.complete) {
-                                        // 将 session_id 保存
-                                        if (obj.session_id) {
-                                            sessionId = obj.session_id;
-                                            localStorage.setItem('session_id', sessionId);
-                                        }
-                                        // 处理 media_info
-                                        if (obj.has_media && obj.media_info) {
-                                            addMediaMessage(obj.media_info);
-                                        }
-                                        // 会话生成后把头像换回 initialAvatar
-                                        setTimeout(() => { mainAvatar.src = initialAvatar; }, 500);
-                                    }
-                                } catch (e) {
-                                    // 忽略解析错误
-                                }
-                            }
-                        }
-                    }
-                }
-
-                // 初始 bot message placeholder
-                addPartialBot('');
-
-                while (true) {
-                    const { done, value } = await reader.read();
-                    if (done) break;
-                    const chunk = decoder.decode(value, { stream: true });
-                    processChunk(chunk);
-                }
-
-            }).catch(e => {
-                addMessage('请求异常：' + e, 'bot');
+            // 模式按钮
+            document.querySelectorAll('.mode-btn').forEach(b => {
+                b.classList.toggle('active', b.dataset.mode === State.mode);
             });
-        }
-        
-        // 激活聊天界面
-        function activateChat() {
-            // 显示聊天区域
-            chatArea.classList.add('active');
+            // 功能开关
+            DOM.kbToggle.classList.toggle('active', State.kbEnabled);
+            DOM.searchToggle.classList.toggle('active', State.searchEnabled);
             
-            // 更改头像为04.jpg并缩小到左上角
-            mainAvatar.style.width = '40px';
-            mainAvatar.style.height = '40px';
-            mainAvatar.style.position = 'fixed';
-            mainAvatar.style.top = '20px';
-            mainAvatar.style.left = '20px';
-            mainAvatar.style.margin = '0';
-            mainAvatar.src = userAvatar;
-            
-            isFirstMessage = false;
-        }
-        
-        // 添加用户消息
-        function addMessage(text, sender, save = true) {
-            const messageDiv = document.createElement('div');
-            messageDiv.className = `message ${sender}-message`;
-            messageDiv.textContent = text;
-            
-            chatArea.appendChild(messageDiv);
-            chatArea.scrollTop = chatArea.scrollHeight;
-            
-            // 保存到历史
-            if (save) {
-                messageHistory.push({ text, sender, time: new Date() });
-                saveChatState();
+            // 文件条逻辑：仅在 KB 开启且有文件时显示
+            if (State.kbEnabled && State.uploadedFile) {
+                DOM.fileStatusBar.classList.add('active');
+                DOM.fileNameText.textContent = State.uploadedFile.name;
+                DOM.fileIcon.src = State.uploadedFile.type === 'pdf' ? 
+                    'https://cdn-icons-png.flaticon.com/512/337/337946.png' : 
+                    'https://cdn-icons-png.flaticon.com/512/337/337948.png';
+            } else {
+                DOM.fileStatusBar.classList.remove('active');
             }
+
+            DOM.chatArea.innerHTML = '';
+            State.history.forEach(m => renderMessage(m.text, m.sender, m.media));
+            DOM.chatInput.value = Persist.loadDraft();
+            DOM.chatArea.scrollTop = DOM.chatArea.scrollHeight;
         }
-        
-        function addBotMessage(text, save = true) {
-            const messageDiv = document.createElement('div');
-            messageDiv.className = 'message bot-message';
 
-            const avatarImg = document.createElement('img');
-            avatarImg.className = 'bot-avatar';
-            avatarImg.src = initialAvatar;
-            avatarImg.alt = 'AI';
-
-            const textContainer = document.createElement('span');
-            textContainer.textContent = text || '';
-
-            messageDiv.appendChild(avatarImg);
-            messageDiv.appendChild(textContainer);
-
-            chatArea.appendChild(messageDiv);
-            chatArea.scrollTop = chatArea.scrollHeight;
-
-            if (save) {
-                messageHistory.push({ text: text || '', sender: 'bot', time: new Date() });
-                saveChatState();
+        function renderMessage(text, sender, media = null) {
+            const div = document.createElement('div');
+            div.className = `message ${sender}-message`;
+            if (sender === 'bot') {
+                const img = document.createElement('img');
+                img.className = 'bot-avatar';
+                img.src = AVATARS.bot;
+                div.appendChild(img);
+                const span = document.createElement('span');
+                span.textContent = text;
+                div.appendChild(span);
+            } else {
+                div.textContent = text;
             }
+            DOM.chatArea.appendChild(div);
+            if (media) renderMedia(media);
+            DOM.chatArea.scrollTop = DOM.chatArea.scrollHeight;
+            return div;
         }
 
-        // 添加一个正在更新的 bot 消息（用于流式分块更新）
-        function addPartialBot(initialText) {
-            addBotMessage(initialText || '', true);
-        }
-
-        function addMediaMessage(media_info) {
-            if (!media_info) return;
-            if (media_info.type === 'url' && media_info.url) {
+        function renderMedia(media) {
+            const container = document.createElement('div');
+            container.className = 'message bot-message';
+            if (media.type === 'url' || (media.type === 'file' && media.format === 'base64')) {
                 const img = document.createElement('img');
-                img.src = media_info.url;
                 img.className = 'message-image';
-                const container = document.createElement('div');
-                container.className = 'message bot-message';
+                img.src = media.url || ('data:image/png;base64,' + media.data);
                 container.appendChild(img);
-                chatArea.appendChild(container);
-                chatArea.scrollTop = chatArea.scrollHeight;
-            } else if (media_info.type === 'file' && media_info.format === 'base64' && media_info.data) {
-                // 假设是图片 base64
-                const img = document.createElement('img');
-                img.src = 'data:image/png;base64,' + media_info.data;
-                img.className = 'message-image';
-                const container = document.createElement('div');
-                container.className = 'message bot-message';
-                container.appendChild(img);
-                chatArea.appendChild(container);
-                chatArea.scrollTop = chatArea.scrollHeight;
-            } else if (media_info.type === 'mindmap' && media_info.data) {
-                const container = document.createElement('div');
-                container.className = 'message bot-message';
+            } else if (media.type === 'mindmap') {
                 const graphDiv = document.createElement('div');
                 graphDiv.className = 'mindmap-container';
                 container.appendChild(graphDiv);
-                chatArea.appendChild(container);
-                chatArea.scrollTop = chatArea.scrollHeight;
-
-                const graphData = media_info.data.data || media_info.data;
-
-                function drawMind(data) {
+                setTimeout(() => {
                     const graph = new G6.TreeGraph({
-                        container: graphDiv,
-                        width: graphDiv.clientWidth,
-                        height: 400,
+                        container: graphDiv, width: graphDiv.clientWidth, height: 350,
                         modes: { default: ['collapse-expand', 'drag-canvas', 'zoom-canvas'] },
-                        defaultNode: {
-                            type: 'rect', size: [80,28], style:{radius:4,fill:'#E6F7FF',stroke:'#1890FF'},
-                            labelCfg:{position:'center',style:{fill:'#000',fontSize:12}}
-                        },
-                        defaultEdge:{ type:'cubic-horizontal', style:{stroke:'#A3B1BF'}},
-                        layout:{ type:'mindmap', direction:'H', getHeight:()=>16, getWidth:()=>80, getVGap:()=>10, getHGap:()=>60, getSide:()=> 'right'}
+                        defaultNode: { type: 'rect', size: [80, 28], style: { radius: 4, fill: '#E6F7FF', stroke: '#1890FF' }, labelCfg: { style: { fontSize: 11 } } },
+                        layout: { type: 'mindmap', direction: 'H', getHGap: () => 50, getVGap: () => 10 }
                     });
-                    graph.data(data);
+                    graph.data(media.data.data || media.data);
                     graph.render();
-                }
+                }, 100);
+            }
+            DOM.chatArea.appendChild(container);
+            DOM.chatArea.scrollTop = DOM.chatArea.scrollHeight;
+        }
 
-                if (typeof window.G6 === 'undefined') {
-                    const s = document.createElement('script');
-                    s.src = 'https://gw.alipayobjects.com/os/antv/pkg/_antv.g6-4.7.8/build/g6.min.js';
-                    s.onload = () => drawMind(graphData);
-                    document.head.appendChild(s);
-                } else {
-                    drawMind(graphData);
+        function addSystemMessage(text) {
+            const msg = { text, sender: 'bot', time: Date.now() };
+            State.history.push(msg);
+            renderMessage(text, 'bot');
+            Persist.save();
+        }
+
+        // --- 核心业务 ---
+        async function sendMessage() {
+            const text = DOM.chatInput.value.trim();
+            if (!text) return;
+
+            DOM.chatInput.value = '';
+            Persist.clearDraft();
+            if (State.isFirst) {
+                State.isFirst = false;
+                DOM.body.classList.add('chat-active');
+                DOM.mainAvatar.src = AVATARS.user;
+            }
+            
+            State.history.push({ text, sender: 'user', time: Date.now() });
+            renderMessage(text, 'user');
+            Persist.save();
+            DOM.sendButton.disabled = true;
+
+            try {
+                // 发送请求携带所有门控参数
+                const response = await fetch(`${API_BASE}/api/chat`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${TOKEN}` },
+                    body: JSON.stringify({ 
+                        message: text, 
+                        session_id: State.sessionId, 
+                        stream: true,
+                        mode: State.mode,
+                        kb_enabled: State.kbEnabled,
+                        search_enabled: State.searchEnabled
+                    })
+                });
+
+                if (!response.ok) throw new Error(`HTTP ${response.status}`);
+
+                const reader = response.body.getReader();
+                const decoder = new TextDecoder();
+                let botMsg = { text: '', sender: 'bot', time: Date.now() };
+                State.history.push(botMsg);
+                const botDiv = renderMessage('', 'bot');
+                const botSpan = botDiv.querySelector('span');
+
+                let buffer = '';
+                while (true) {
+                    const { done, value } = await reader.read();
+                    if (done) break;
+                    buffer += decoder.decode(value, { stream: true });
+                    const lines = buffer.split('\n\n');
+                    buffer = lines.pop();
+                    for (const line of lines) {
+                        const trimmed = line.trim();
+                        if (!trimmed.startsWith('data:')) continue;
+                        try {
+                            const data = JSON.parse(trimmed.substring(5));
+                            if (data.chunk) {
+                                botMsg.text = data.chunk;
+                                botSpan.textContent = data.chunk;
+                                DOM.chatArea.scrollTop = DOM.chatArea.scrollHeight;
+                            }
+                            if (data.complete) {
+                                if (data.session_id) State.sessionId = data.session_id;
+                                if (data.has_media && data.media_info) {
+                                    botMsg.media = data.media_info;
+                                    renderMedia(data.media_info);
+                                }
+                                Persist.save();
+                            }
+                        } catch(e) {}
+                    }
                 }
+            } catch (e) {
+                addSystemMessage(`发送失败: ${e.message}`);
+            } finally {
+                DOM.sendButton.disabled = false;
+                Persist.save();
             }
         }
-        
-        // 事件监听
-        sendButton.addEventListener('click', sendMessage);
-        
-        chatInput.addEventListener('keypress', (e) => {
-            if (e.key === 'Enter') {
-                sendMessage();
+
+        // --- 交互监听 ---
+        DOM.modeSelector.addEventListener('click', (e) => {
+            const btn = e.target.closest('.mode-btn');
+            if (!btn) return;
+            State.mode = btn.dataset.mode;
+            syncUI();
+            Persist.save();
+            addSystemMessage(`已切换到${State.mode === 'code' ? '编程助手' : '通用助手'}模式。`);
+        });
+
+        DOM.searchToggle.addEventListener('click', async () => {
+            State.searchEnabled = !State.searchEnabled;
+            syncUI();
+            Persist.save();
+            if (State.searchEnabled) {
+                addSystemMessage('正在预启动联网搜索引擎...');
+                try {
+                    await fetch(`${API_BASE}/api/websearch/prepare`, { method: 'POST', headers: { 'Authorization': `Bearer ${TOKEN}` } });
+                    addSystemMessage('联网搜索已就绪。');
+                } catch(e) {}
             }
         });
+
+        DOM.kbToggle.addEventListener('click', () => {
+            State.kbEnabled = !State.kbEnabled;
+            syncUI();
+            Persist.save();
+            if (State.kbEnabled) {
+                addSystemMessage(State.uploadedFile ? '知识库功能已开启（基于已上传文件）。' : '知识库功能已开启（请拖入 PDF/Word 文件上传）。');
+            }
+        });
+
+        DOM.removeFileBtn.addEventListener('click', async () => {
+            if (!confirm('确定要彻底移除当前知识库文件内容吗？')) return;
+            try {
+                await fetch(`${API_BASE}/api/kb/clear`, {
+                    method: 'POST', headers: { 'Authorization': `Bearer ${TOKEN}`, 'session-id': State.sessionId }
+                });
+                State.uploadedFile = null;
+                State.kbEnabled = false;
+                syncUI();
+                Persist.save();
+                addSystemMessage('本地知识库内容已彻底清除。');
+            } catch(e) { addSystemMessage('清除失败，请重试。'); }
+        });
+
+        // 拖拽上传
+        window.addEventListener('dragenter', (e) => { e.preventDefault(); document.body.classList.add('drag-over'); });
+        DOM.uploadOverlay.addEventListener('dragleave', () => { document.body.classList.remove('drag-over'); });
+        window.addEventListener('dragover', (e) => e.preventDefault());
+        window.addEventListener('drop', async (e) => {
+            e.preventDefault();
+            document.body.classList.remove('drag-over');
+            const file = e.dataTransfer.files[0];
+            if (!file) return;
+            const name = file.name.toLowerCase();
+            if (!name.endsWith('.pdf') && !name.endsWith('.docx')) {
+                addSystemMessage('仅支持 PDF 或 Word 文件。');
+                return;
+            }
+            handleUpload(file);
+        });
+
+        async function handleUpload(file) {
+            State.kbEnabled = true; // 上传即开启
+            State.uploadedFile = { name: file.name, type: file.name.toLowerCase().endsWith('.pdf') ? 'pdf' : 'word' };
+            syncUI();
+            DOM.fileSpinner.style.display = 'block';
+            DOM.fileNameText.textContent = '正在上传并解析文件...';
+
+            const fd = new FormData();
+            fd.append('file', file);
+
+            try {
+                const res = await fetch(`${API_BASE}/api/kb/upload`, {
+                    method: 'POST',
+                    headers: { 'Authorization': `Bearer ${TOKEN}`, 'session-id': State.sessionId },
+                    body: fd
+                });
+                if (!res.ok) throw new Error();
+                const data = await res.json();
+                DOM.fileSpinner.style.display = 'none';
+                addSystemMessage(`《${file.name}》解析成功，共提取 ${data.sentence_count} 条知识。可以开始提问了！`);
+                Persist.save();
+                syncUI();
+            } catch(e) {
+                State.uploadedFile = null;
+                syncUI();
+                addSystemMessage('文件上传解析失败，请检查后端依赖或文件内容。');
+            }
+        }
+
+        DOM.chatInput.addEventListener('input', (e) => Persist.saveDraft(e.target.value));
+        DOM.sendButton.addEventListener('click', sendMessage);
+        DOM.chatInput.addEventListener('keypress', (e) => e.key === 'Enter' && sendMessage());
+
+        Persist.load();
+        syncUI();
     </script>
 </body>
 </html>
